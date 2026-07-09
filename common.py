@@ -357,3 +357,63 @@ def _num(row, field):
 def _int(row, field):
     v = _num(row, field)
     return int(v) if v is not None else None
+
+
+# ---------------------------------------------------------------------------
+# 并行执行:每个工作线程持有自己的数据库连接(psycopg2 连接不能跨线程共享)。
+# 断点续传由 etl_progress 保证,与并发无关。
+# ---------------------------------------------------------------------------
+import itertools
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
+_tls = threading.local()
+_all_conns: list = []
+_conns_lock = threading.Lock()
+
+
+def _thread_conn():
+    """当前线程专属的数据库连接(懒创建,run_stock_todo 结束时统一关闭)。"""
+    conn = getattr(_tls, "conn", None)
+    if conn is None or conn.closed:
+        conn = get_conn()
+        _tls.conn = conn
+        with _conns_lock:
+            _all_conns.append(conn)
+    return conn
+
+
+def run_stock_todo(todo, task: str, load_fn, workers: int) -> None:
+    """
+    按 workers 数串行或并行处理股票清单。
+    load_fn(conn, row):处理单只;抛异常则记 error 进度,不中断整体。
+    """
+    todo = list(todo)
+    total = len(todo)
+    counter = itertools.count(1)  # CPython 下 next() 原子,足够做进度计数
+
+    def work(r):
+        conn = _thread_conn()
+        try:
+            load_fn(conn, r)
+        except Exception as exc:  # noqa: BLE001
+            conn.rollback()
+            mark_progress(conn, task, r.stock_code, None, status="error", message=str(exc))
+            log.error("  %s 失败: %s", r.stock_code, exc)
+        i = next(counter)
+        if i % 100 == 0:
+            log.info("进度 %d / %d", i, total)
+
+    if workers <= 1:
+        for r in todo:
+            work(r)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(work, todo))
+    with _conns_lock:
+        for conn in _all_conns:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+        _all_conns.clear()

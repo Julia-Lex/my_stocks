@@ -11,7 +11,8 @@
 重跑会从断点继续。
 
 用法:
-  python 02_init_load.py                 # 全量
+  python 02_init_load.py                 # 全量(串行)
+  python 02_init_load.py --workers 4     # 4 个并发拉取(注意免费源限流)
   python 02_init_load.py --limit 50      # 只跑前 50 只(试跑)
   python 02_init_load.py --reset         # 清空进度重来
 """
@@ -68,10 +69,14 @@ def load_one_stock(conn, stock_code: str, symbol: str) -> None:
     c.log.info("  %s: 日线 %d / 因子 %d", stock_code, n_daily, n_adj)
 
 
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=None, help="只处理前 N 只(试跑)")
     ap.add_argument("--reset", action="store_true", help="清空 init 进度重来")
+    ap.add_argument("--workers", type=int, default=1,
+                    help="并发拉取线程数(默认 1;免费源限流,建议不超过 4)")
     args = ap.parse_args()
 
     conn = c.get_conn()
@@ -90,17 +95,14 @@ def main() -> int:
 
         done = c.get_done_codes(conn, TASK)
         todo = [r for r in stocks.itertuples(index=False) if r.stock_code not in done]
-        c.log.info("待处理 %d 只(已完成 %d 只)", len(todo), len(done))
+        c.log.info("待处理 %d 只(已完成 %d 只,并发 %d)", len(todo), len(done), args.workers)
 
-        for i, r in enumerate(todo, 1):
-            try:
-                load_one_stock(conn, r.stock_code, r.symbol)
-            except Exception as exc:  # noqa: BLE001
-                conn.rollback()
-                c.mark_progress(conn, TASK, r.stock_code, None, status="error", message=str(exc))
-                c.log.error("  %s 失败: %s", r.stock_code, exc)
-            if i % 100 == 0:
-                c.log.info("进度 %d / %d", i, len(todo))
+        conn.commit()  # 结束只读事务,避免长时间 idle-in-transaction 阻塞 DDL/vacuum
+
+        def _load(conn2, r):
+            load_one_stock(conn2, r.stock_code, r.symbol)
+
+        c.run_stock_todo(todo, TASK, _load, args.workers)
 
         c.log.info("刷新周线/月线物化视图 ...")
         c.refresh_matviews(conn)
