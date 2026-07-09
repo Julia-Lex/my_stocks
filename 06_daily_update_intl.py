@@ -3,7 +3,8 @@
 
 同 03_daily_update.py:先刷参考数据(列表/指数/日历),再按缺口增量。
 新股(库内无记录)直接全量拉取,不走日历缺口检测——因为港/美交易日历由
-指数日线派生,仅覆盖 2013-08 起,缺口检测会漏掉更早历史(见 update_one)。
+指数日线派生,覆盖有限(港股 2013-08 起,HSI 派生;美股 2004-01 起,
+.DJI/.INX/.IXIC 派生),缺口检测会漏掉更早历史(见 update_one)。
 
 cron 建议(北京时间):
   港股: 0 18 * * 1-5  ... python 06_daily_update_intl.py --market hk
@@ -71,9 +72,11 @@ def make_updater(market: str, task: str, lookback_days: int):
         max_d = c.get_max_trade_date(conn, r.stock_code, table=f"{p}daily_price")
 
         if max_d is None:
-            # 新股:直接全量(日历仅覆盖 2013-08+,缺口检测会漏掉更早历史)
+            # 新股:直接全量(日历覆盖有限——港 2013-08+/美 2004-01+,
+            # 缺口检测会漏掉更早历史)
             daily = c.fetch_intl_daily(market, fetch_symbol)
             n = c.upsert_daily(conn, r.stock_code, daily, table=f"{p}daily_price")
+            # raw= 仅 em 回退路径生效(省一次请求);tx 生产路径因子取自新浪,忽略之
             adj = c.fetch_intl_hfq_factor(market, fetch_symbol, raw=daily)
             c.upsert_adj_factor(conn, r.stock_code, adj, table=f"{p}adj_factor")
             last = daily["trade_date"].max() if not daily.empty else None
@@ -121,7 +124,7 @@ def main() -> int:
         rows = list(stocks.itertuples(index=False))
         c.log.info("[%s] 增量更新 %d 只 ...", args.market, len(rows))
         c.run_stock_todo(rows, task, make_updater(args.market, task, args.days),
-                         args.workers)
+                         args.workers, max_consecutive_errors=15)
 
         if not args.no_matview:
             c.log.info("[%s] 刷新周线/月线物化视图 ...", args.market)
