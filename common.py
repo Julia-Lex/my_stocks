@@ -480,9 +480,9 @@ def _fetch_intl_daily_em(market: str, fetch_symbol: str,
 #     只在 A 股(sz/sh 前缀)代码上才会返回 "hfqday"/"qfqday" 键;港股 hk*、
 #     美股 us* 代码无论 fq 传什么,返回键恒为 "day" 且数值与不复权一致
 #     (已用 00700 的 2014 年 1:5 拆股、AAPL 的 2014 年 7:1 拆股验证:跨拆股
-#     日价格不连续,证明没有做复权)。因此 hk_adj_factor / us_adj_factor
-#     的 adj_factor 目前恒为 1.0 —— 这是数据源本身的限制,不是本实现的
-#     bug;后续若要港/美股真复权因子,需要另找复权/拆股公告数据源。
+#     日价格不连续,证明没有做复权)。因此腾讯只用来拉「不复权日线价格」,
+#     复权因子(hk_adj_factor / us_adj_factor)改走新浪(见
+#     _fetch_intl_hfq_factor_tx),Task 4c 已修复。
 # ---------------------------------------------------------------------------
 _TX_KLINE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
 _TX_WINDOW_YEARS = 7   # 每段跨度(年),配合 _TX_MAX_COUNT 避免触发 "param error"
@@ -616,21 +616,56 @@ def _fetch_intl_hfq_factor_em(market: str, fetch_symbol: str,
 
 def _fetch_intl_hfq_factor_tx(market: str, fetch_symbol: str,
                               raw: Optional[pd.DataFrame] = None) -> pd.DataFrame:
-    """腾讯实现,同 em 版沿用 hfq close ÷ raw close 的 merge 逻辑。
-    注意:腾讯 fq 参数对港/美股不生效(见 _tx_kline_request 上方说明),
-    hfq 序列与 raw 序列在数值上恒等,故这里算出的 adj_factor 恒为 1.0 ——
-    如实体现数据源限制,不做额外处理(是否需要真实复权因子由后续决策)。
+    """港/美复权因子改走新浪(Task 4c)。返回列: trade_date, adj_factor。
+
+    背景:腾讯 K 线 fq 参数对港/美股不生效(见 _tx_kline_request 上方说明),
+    此前这里用 "hfq close ÷ raw close" 算出的 adj_factor 恒为 1.0,是数据源
+    本身的限制。腾讯继续只负责拉「不复权日线价格」(_fetch_intl_daily_tx),
+    因子改用新浪的 *-factor 接口,`raw` 参数不再需要(保留仅为兼容旧签名)。
+
+    港股:ak.stock_hk_daily(adjust="hfq-factor") 直接给出后复权因子 —— 锚点
+    在最早交易日(=1)、逐笔递增,与本库 A 股 adj_factor 的语义一致,列名
+    重命名即可入库。响应里还有一列 "cash"(累计现金分红,港元)未使用——
+    完整公式是 hfq_close=(raw_close+cash)*factor,但本库 schema 只有单一
+    乘法因子列存不下 cash,忽略它是已知简化:只丢失现金分红再投资的效应,
+    不影响拆股场景的连续性(已用 00700 2014-05 一拆五验证,见 task-4c 报告)。
+
+    美股:ak.stock_us_daily 没有 hfq-factor,只有 qfq-factor(锚点在最新
+    交易日=1、逐笔递减)。**qfq_factor 要直接当 adj_factor 用,不能取倒数**——
+    实测取倒数会在拆股日制造出巨大的人为价格跳变(以 AAPL 2020-08-31
+    四拆一为例:直接使用 close*qfq_factor 在拆股前后连续、偏差约 3.4%;
+    取倒数 close*(1/qfq_factor) 则从约 1997 跳到 129,偏差 1447%,详见
+    task-4c 报告的实测数字)。qfq_factor 锚点虽在最新日而非最早日,但
+    daily_price_hfq/qfq 视图只关心「按日取最近因子相乘」这一相对关系,
+    锚点位置不影响复权后的日间收益率、也不影响跨拆股连续性,数学上与本库
+    其余 hfq 因子的用法等价。同样忽略了 "adjust" 累计分红调整列(简化,
+    理由同港股)。symbol 需去掉 em_symbol 的 "us" 前缀 —— 新浪美股接口用
+    裸 ticker(如 "AAPL"/"BRK.B"),不接受 "usAAPL"(实测 IndexError)。
     """
-    if raw is None:
-        raw = _fetch_intl_daily_tx(market, fetch_symbol)
-    hfq = _fetch_intl_daily_tx(market, fetch_symbol, adjust="hfq")
-    if raw.empty or hfq.empty:
+    import akshare as ak
+
+    if market == "hk":
+        symbol = str(fetch_symbol).zfill(5)
+        df = with_retry(ak.stock_hk_daily, symbol=symbol, adjust="hfq-factor")
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df = df.rename(columns={"date": "trade_date", "hfq_factor": "adj_factor"})
+        df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
+        df["adj_factor"] = pd.to_numeric(df["adj_factor"], errors="coerce")
+        return (df[["trade_date", "adj_factor"]].dropna()
+                  .sort_values("trade_date").reset_index(drop=True))
+
+    # us:去掉 em_symbol 的 "us" 前缀还原裸 ticker
+    ticker = fetch_symbol[2:] if str(fetch_symbol).lower().startswith("us") else str(fetch_symbol)
+    df = with_retry(ak.stock_us_daily, symbol=ticker, adjust="qfq-factor")
+    if df is None or df.empty:
         return pd.DataFrame()
-    merged = raw[["trade_date", "close"]].merge(
-        hfq[["trade_date", "close"]], on="trade_date", suffixes=("_raw", "_hfq"))
-    merged = merged[merged["close_raw"] > 0]
-    merged["adj_factor"] = merged["close_hfq"] / merged["close_raw"]
-    return merged[["trade_date", "adj_factor"]].dropna()
+    df = df.rename(columns={"date": "trade_date", "qfq_factor": "adj_factor"})
+    df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
+    df["adj_factor"] = pd.to_numeric(df["adj_factor"], errors="coerce")
+    df = df[df["adj_factor"] > 0]   # 防御性过滤,避免脏数据/0 传导到下游视图
+    return (df[["trade_date", "adj_factor"]].dropna()
+              .sort_values("trade_date").reset_index(drop=True))
 
 
 def fetch_intl_index(market: str, index_code: str) -> pd.DataFrame:
