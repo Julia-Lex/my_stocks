@@ -23,6 +23,9 @@
 | `common.py` | 数据库连接、AKShare 拉取、列名映射、upsert、进度 |
 | `02_init_load.py` | 全量历史初始化(断点续传,首次约 2~4 小时) |
 | `03_daily_update.py` | 每日增量 + 自动补漏 |
+| `04_schema_hk_us.sql` | 港股/美股建表(方案 B 分表,前缀 hk_/us_) |
+| `05_init_load_intl.py` | 港/美全量初始化(`--market hk|us`) |
+| `06_daily_update_intl.py` | 港/美每日增量 + 补漏 |
 | `requirements.txt` | Python 依赖 |
 
 ## 快速开始(在你本机执行)
@@ -59,7 +62,7 @@ python 03_daily_update.py
 
 ```cron
 # 工作日 18:00 收盘后增量更新
-0 18 * * 1-5  cd /path/to/my_stocks && ASTOCK_DB_PASSWORD='xxx' python 03_daily_update.py >> update.log 2>&1
+0 18 * * 1-5  cd /path/to/my_stocks && ASTOCK_DB_USER=zhu ASTOCK_DB_PASSWORD='xxx' .venv/bin/python 03_daily_update.py >> update.log 2>&1
 ```
 
 ## 常用查询
@@ -91,6 +94,29 @@ SELECT * FROM weekly_price_hfq WHERE stock_code = '000001.SZ' ORDER BY period_st
 - **接口列名报错**:AKShare 会随数据源改列名。先 `pip install -U akshare`,仍不行就改 `common.py` 里的 `RENAME_HIST` / `RENAME_INDEX` 映射。
 - **后复权因子拿不到**:`fetch_hfq_factor` 会自动退化为「后复权价 ÷ 原始价」现算,一般无需干预。
 - **限流/超时**:所有接口调用已带指数退避重试(2s→4s→8s→16s)。大规模跑建议错峰。
+- **东财单 IP 风控**:东财对单个 IP 有累计流量限制,约 5 并发 × 2 小时后会触发连接级封禁(RemoteDisconnected 异常),冷却期可能超过 30 分钟。全量初始化建议使用 ≤3 并发、分市场错峰拉取;若被风控封禁,建议等待解封后继续跑,断点续传机制保证零数据浪费。
+
+## 港股 / 美股
+
+方案 B 分市场独立表(设计:`docs/superpowers/specs/2026-07-09-hk-us-daily-db-design.md`):
+
+- 范围:港股全列表 ~2,700 只;美股市值前 600(主要中概股如 BABA/PDD 已在其中)(快照式,只增不删)。
+- **成交量单位为股**(A 股为手);货币按表隐含:`hk_*`=HKD,`us_*`=USD。
+- 交易日历从指数日线派生(恒指 / 标普500);港股日历派生自新浪恒指数据,仅覆盖 2013-08 之后;增量补漏只依赖近期日历,不受影响。复权因子 = 东财 hfq 收盘 ÷ 原始收盘。
+
+```bash
+psql -d astock -f 04_schema_hk_us.sql
+ASTOCK_DB_USER=zhu .venv/bin/python 05_init_load_intl.py --market hk --limit 20   # 试跑
+ASTOCK_DB_USER=zhu .venv/bin/python 05_init_load_intl.py --market hk --workers 3  # 港股全量 ~1.5h
+ASTOCK_DB_USER=zhu .venv/bin/python 05_init_load_intl.py --market us --workers 3  # 美股 ~20min
+```
+
+每日定时(北京时间;美股收盘为北京次日凌晨,早上拉前一交易日):
+
+```cron
+0 18 * * 1-5  cd /path/to/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 06_daily_update_intl.py --market hk >> update_hk.log 2>&1
+0 9  * * 2-6  cd /path/to/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 06_daily_update_intl.py --market us >> update_us.log 2>&1
+```
 
 ## 后续(第二期)
 
