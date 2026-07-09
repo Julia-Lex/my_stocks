@@ -16,6 +16,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import threading
 import time
 from datetime import date, datetime
 from typing import Iterable, Optional, Sequence
@@ -502,6 +503,24 @@ _TX_KLINE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
 _TX_WINDOW_YEARS = 7   # 每段跨度(年),配合 _TX_MAX_COUNT 避免触发 "param error"
 _TX_MAX_COUNT = 2000   # 实测安全上限(2000 可用,2100 报错)
 
+# 抗 WAF 三件套之二:全局请求节流。港股全量在 111 只后触发腾讯 WAF(501),
+# 根因之一是请求无节流(2 workers ≈ 4-5 req/s)。用模块级锁 + 单调时钟强制
+# 任意两次腾讯请求(含 with_retry 内部重试)间隔 ≥ TX_MIN_INTERVAL,锁内
+# sleep 补足间隔以便跨线程也生效(持锁线程睡够时间才放行下一个请求方)。
+TX_MIN_INTERVAL = float(os.getenv("ASTOCK_TX_MIN_INTERVAL", "0.35"))
+_tx_throttle_lock = threading.Lock()
+_tx_last_request_ts = 0.0
+
+
+def _tx_throttle() -> None:
+    """阻塞直到与上一次腾讯请求的间隔 ≥ TX_MIN_INTERVAL。跨线程生效。"""
+    global _tx_last_request_ts
+    with _tx_throttle_lock:
+        wait = _tx_last_request_ts + TX_MIN_INTERVAL - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        _tx_last_request_ts = time.monotonic()
+
 
 def _tx_kline_request(code: str, start: str, end: str,
                       count: int = _TX_MAX_COUNT, fq: str = "") -> pd.DataFrame:
@@ -512,6 +531,7 @@ def _tx_kline_request(code: str, start: str, end: str,
     param = f"{code},day,{start},{end},{count},{fq}"
 
     def _do():
+        _tx_throttle()
         resp = requests.get(_TX_KLINE_URL, params={"param": param}, timeout=15)
         resp.raise_for_status()
         return resp.json()
@@ -536,16 +556,49 @@ def _tx_kline_request(code: str, start: str, end: str,
     return df.dropna(subset=["trade_date"])
 
 
-def _tx_fetch_full(code: str, start_year: int, end_year: int, fq: str = "") -> pd.DataFrame:
-    """按 _TX_WINDOW_YEARS 年一段循环请求并拼接、去重、排序。"""
-    frames = []
+def _tx_year_windows(start_year: int, end_year: int) -> list[tuple[int, int]]:
+    """按 _TX_WINDOW_YEARS 年一段切分 [start_year, end_year],窗口边界与旧的
+    正序实现完全一致(只是遍历方向由调用方决定),保证输出等价。
+    """
+    windows = []
     y = start_year
     while y <= end_year:
         y2 = min(y + _TX_WINDOW_YEARS - 1, end_year)
+        windows.append((y, y2))
+        y = y2 + 1
+    return windows
+
+
+def _tx_fetch_full(code: str, start_year: int, end_year: int, fq: str = "") -> pd.DataFrame:
+    """抗 WAF 三件套之一:窗口倒序遍历 + 空窗即停。
+
+    从最新窗口向最早方向逐个请求(港/美股大多 2000 年后上市,若仍按老实现
+    从 1980 正序拉,上市前的窗口全是空请求,白白浪费流量、加速触发 WAF)。
+    某窗口返回 0 行即认为已越过该股上市前的历史起点,提前停止(正常情况下
+    最多浪费 1 个空请求)。
+
+    边界:最新(含今天)窗口若为空,不能就此断定"无历史"——该股可能只是
+    近期停牌/退市,继续往前多试 1 个窗口;若那个窗口仍为空才真正停止(即
+    连续 2 个空窗才停,最多浪费 2 个请求);一旦确认拿到过数据,后续窗口
+    恢复"单个空窗即停"的正常规则。
+
+    拼接后仍按 trade_date 正序返回、去重排序逻辑不变,窗口边界与旧的正序
+    实现完全一致,故最终输出(行序/列/内容)与旧实现等价,调用方无感知。
+    """
+    windows = _tx_year_windows(start_year, end_year)
+    frames = []
+    is_first_window = True
+    for y, y2 in reversed(windows):
         df = _tx_kline_request(code, f"{y}-01-01", f"{y2}-12-31", fq=fq)
         if not df.empty:
             frames.append(df)
-        y = y2 + 1
+            is_first_window = False
+            continue
+        if is_first_window:
+            # 首窗(最新)为空:可能是停牌/退市,再往前多试 1 个窗口再判断
+            is_first_window = False
+            continue
+        break  # 非首窗为空:已越过历史起点,停止
     if not frames:
         return pd.DataFrame()
     out = pd.concat(frames, ignore_index=True).drop_duplicates("trade_date").sort_values("trade_date")
@@ -898,7 +951,6 @@ def _int(row, field):
 # 断点续传由 etl_progress 保证,与并发无关。
 # ---------------------------------------------------------------------------
 import itertools
-import threading
 from concurrent.futures import ThreadPoolExecutor
 
 _tls = threading.local()
@@ -917,30 +969,65 @@ def _thread_conn():
     return conn
 
 
-def run_stock_todo(todo, task: str, load_fn, workers: int) -> None:
+def run_stock_todo(todo, task: str, load_fn, workers: int,
+                   max_consecutive_errors: Optional[int] = None) -> None:
     """
     按 workers 数串行或并行处理股票清单。
     load_fn(conn, row):处理单只;抛异常则记 error 进度,不中断整体。
+
+    抗 WAF 三件套之三:熔断器。max_consecutive_errors 为 None(默认)时行为
+    与之前完全一致、不开启熔断。开启后:连续失败次数(任一成功即清零,
+    锁保护、线程安全)达到阈值即视为疑似数据源被封禁 —— 记一条
+    log.critical(说明疑似源封禁、已处理 N / 共 M、建议冷却后重跑续传),
+    并停止派发剩余待办:并行模式下置停止标志,work() 开头检查到标志直接
+    return 跳过(不标 error,留给下次续传自动补上);串行模式直接 break。
     """
     todo = list(todo)
     total = len(todo)
     counter = itertools.count(1)  # CPython 下 next() 原子,足够做进度计数
 
+    breaker_lock = threading.Lock()
+    breaker_state = {"consecutive": 0, "tripped": False}
+
+    def _note_result(success: bool, i: int) -> None:
+        if max_consecutive_errors is None:
+            return
+        with breaker_lock:
+            if success:
+                breaker_state["consecutive"] = 0
+                return
+            breaker_state["consecutive"] += 1
+            if breaker_state["consecutive"] >= max_consecutive_errors and not breaker_state["tripped"]:
+                breaker_state["tripped"] = True
+                log.critical(
+                    "连续 %d 只失败,疑似数据源被封禁(WAF/限流),停止派发剩余待办"
+                    "(已处理 %d / 共 %d)。建议冷却一段时间后重跑本任务续传"
+                    "(未派发的股票不会被标记为 error,断点续传会自动补上)。",
+                    breaker_state["consecutive"], i, total,
+                )
+
     def work(r):
+        if max_consecutive_errors is not None and breaker_state["tripped"]:
+            return  # 熔断已触发:跳过剩余待办(不标 error),留给下次续传
         conn = _thread_conn()
+        success = False
         try:
             load_fn(conn, r)
+            success = True
         except Exception as exc:  # noqa: BLE001
             conn.rollback()
             mark_progress(conn, task, r.stock_code, None, status="error", message=str(exc))
             log.error("  %s 失败: %s", r.stock_code, exc)
         i = next(counter)
+        _note_result(success, i)
         if i % 100 == 0:
             log.info("进度 %d / %d", i, total)
 
     if workers <= 1:
         for r in todo:
             work(r)
+            if max_consecutive_errors is not None and breaker_state["tripped"]:
+                break
     else:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             list(pool.map(work, todo))

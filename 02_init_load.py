@@ -102,7 +102,7 @@ def main() -> int:
         def _load(conn2, r):
             load_one_stock(conn2, r.stock_code, r.symbol)
 
-        c.run_stock_todo(todo, TASK, _load, args.workers)
+        c.run_stock_todo(todo, TASK, _load, args.workers, max_consecutive_errors=15)
 
         c.log.info("刷新周线/月线物化视图 ...")
         c.refresh_matviews(conn)

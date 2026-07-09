@@ -91,7 +91,8 @@ def main() -> int:
         c.log.info("[%s] 待处理 %d 只(已完成 %d 只,并发 %d)",
                    args.market, len(todo), len(done), args.workers)
 
-        c.run_stock_todo(todo, task, make_loader(args.market, task), args.workers)
+        c.run_stock_todo(todo, task, make_loader(args.market, task), args.workers,
+                        max_consecutive_errors=15)
 
         c.log.info("[%s] 刷新周线/月线物化视图 ...", args.market)
         c.refresh_matviews(conn, c.MARKETS[args.market]["mviews"])
