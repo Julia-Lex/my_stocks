@@ -644,9 +644,13 @@ def _fetch_daily_tx(symbol: str, start: str = "19900101", end: Optional[str] = N
         return pd.DataFrame()
     df = df.sort_values("trade_date").reset_index(drop=True)
     df["pct_chg"] = df["close"].pct_change() * 100
-    # 腾讯 A 股 K 线成交量单位是手(实测 000001 与东财原始值一致);
-    # 全库统一存股,×100 换算。注意:港/美(_fetch_intl_daily_tx)原生就是股,不换算。
-    df["volume"] = df["volume"] * 100
+    # 腾讯 A 股 K 线成交量单位按板块不同:主板/创业板是「手」(实测 000001、
+    # 002830 与东财原始值一致),但科创板(688/689)原生就是「股」(2026-07-09
+    # 实测 688469:腾讯值与通达信分钟加总一致,是主板口径的 100 倍)。
+    # 全库统一存股:非科创板 ×100,科创板不换算。港/美(_fetch_intl_daily_tx)
+    # 原生股,不换算;北交所腾讯无 K 线数据(daily=0),暂不涉及。
+    if not symbol.lstrip().startswith(("688", "689")):
+        df["volume"] = df["volume"] * 100
     df["amount"] = pd.NA
     df["turnover"] = pd.NA
 
@@ -1005,6 +1009,31 @@ def upsert_adj_factor(conn, stock_code: str, df: pd.DataFrame, table: str = "adj
     cols = ["stock_code", "trade_date", "adj_factor"]
     rows = [(stock_code, r.trade_date, float(r.adj_factor)) for r in df.itertuples(index=False)]
     return upsert(conn, table, cols, rows, ["stock_code", "trade_date"])
+
+
+def upsert_minute(conn, stock_code: str, df: pd.DataFrame) -> int:
+    """1 分钟线入库。trade_time 为 bar 结束时刻;volume 单位股(通达信原生即股)。
+
+    不挂 drop_unclosed_bars(那是日线的 15:30 口径):分钟 bar 只要该分钟
+    已走完即为定盘,由调用方按 beijing_now() 过滤未走完的最后一根。
+    """
+    if df.empty:
+        return 0
+    cols = ["stock_code", "trade_time", "open", "high", "low", "close", "volume", "amount"]
+    rows = [
+        (stock_code, r.trade_time,
+         _num(r, "open"), _num(r, "high"), _num(r, "low"), _num(r, "close"),
+         _int(r, "volume"), _num(r, "amount"))
+        for r in df.itertuples(index=False)
+    ]
+    return upsert(conn, "minute_price", cols, rows, ["stock_code", "trade_time"])
+
+
+def ensure_minute_partitions(conn, start: date, months: int) -> None:
+    """确保 [start 所在月, +months) 的月度分区存在(调 schema 里的同名 SQL 函数)。"""
+    with conn.cursor() as cur:
+        cur.execute("SELECT ensure_minute_partitions(%s, %s)", (start, months))
+    conn.commit()
 
 
 def upsert_index(conn, index_code: str, df: pd.DataFrame, table: str = "index_daily") -> int:
