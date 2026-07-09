@@ -18,7 +18,7 @@ import logging
 import os
 import threading
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Iterable, Optional, Sequence
 
 import pandas as pd
@@ -648,23 +648,57 @@ def _fetch_daily_tx(symbol: str, start: str = "19900101", end: Optional[str] = N
 # 美股代码后缀解析缓存:清单阶段 em_symbol 不含交易所后缀(如 'usAAPL'),
 # 逐个探测太慢,改为在首次实际拉数时按 "原样 -> .OQ -> .N" 试探并缓存
 # (纳斯达克 = .OQ,纽交所 = .N;已用 AAPL/.OQ、GE/KO/IBM/.N、BABA/PDD/.N/.OQ
-# 等验证)。探测关键:错误后缀不会返回空,而是返回 1~2 行"稀疏假数据"
-# (服务端按裸代码模糊匹配到了真实标的的实时行情,但历史K线只给了极少
-# 缓存行),故不能以"非空"判空,改为"最近 30 天至少拿到 10 行"作为命中标准。
+# 等验证)。
+#
+# 探测有两个陷阱(两轮探测的设计由此而来):
+# 1. 错误后缀不会返回空,而是返回 1~2 行"稀疏假数据"(服务端按裸代码模糊
+#    匹配到了真实标的的实时行情,但历史K线只给了极少缓存行),故不能以
+#    "非空"判空,必须设行数阈值(≥10)。
+# 2. 【换所股陷阱,Task 4b 修复】曾换过交易所的股票(如 DELL/CIEN/DECK/SCHW
+#    都是纳斯达克 -> 纽交所),废弃的旧上市地代码(usDELL.OQ)在**无日期**
+#    探测下仍会返回旧史缓存的最后 30 行(≥10 行,足以冒充命中),而 .OQ 排
+#    在 .N 之前 —— 于是解析错选了死代码;随后 _tx_fetch_full 的"最新窗口
+#    倒序 + 空窗即停"策略在死代码上最近两个窗口全空、直接早停,日线 0 行。
+#    修复:第一轮探测改用**带日期的近 60 天窗口**(死代码对带日期的近期请求
+#    返回 0 行,只有现役上市地会返回成片数据),窗口约 40 个交易日,阈值
+#    ≥10 行留足假期/停牌余量;若三个候选全不达标(近 60 天无数据,例如
+#    已退市、或腾讯没有该交易所的行情源,如 CBOE 的 Cboe BZX),再退回
+#    第二轮无日期探测(旧行为),保证至少还能解析到有旧史缓存的代码。
+#    边界:上市不足 10 个交易日的新股两轮都可能探测不中,维持裸码返回
+#    (行为与修复前一致)。
 _US_TX_SUFFIXES = ("", ".OQ", ".N")
+_US_TX_PROBE_DAYS = 60      # 第一轮探测回看的自然日窗口
+_US_TX_PROBE_MIN_ROWS = 10  # 命中所需最少行数(约 40 个交易日里出现 ≥10 行)
 _us_tx_code_cache: dict[str, str] = {}
 
 
 def _tx_resolve_us_code(em_symbol: str) -> str:
     if em_symbol in _us_tx_code_cache:
         return _us_tx_code_cache[em_symbol]
-    resolved = em_symbol
+    today = date.today()
+    p_start = (today - timedelta(days=_US_TX_PROBE_DAYS)).isoformat()
+    p_end = today.isoformat()
+    resolved = None
+    # 第一轮:带日期的近 60 天窗口(只有现役上市地会返回成片近期数据,
+    # 死代码/错误后缀返回 0~1 行,见上方"换所股陷阱")
     for suf in _US_TX_SUFFIXES:
         cand = em_symbol + suf
-        probe = with_retry(_tx_kline_request, cand, "", "", 30, "")
-        if len(probe) >= 10:
+        probe = with_retry(_tx_kline_request, cand, p_start, p_end, 45, "")
+        if len(probe) >= _US_TX_PROBE_MIN_ROWS:
             resolved = cand
             break
+    # 第二轮(兜底):无日期探测。覆盖近 60 天无数据的标的(已退市/腾讯缺
+    # 该交易所行情源),至少解析到有历史缓存的代码;注意此路径解析出的代码
+    # 经 _tx_fetch_full 的"空窗即停"仍可能拉到 0 行(如 CBOE),属数据源缺口。
+    if resolved is None:
+        for suf in _US_TX_SUFFIXES:
+            cand = em_symbol + suf
+            probe = with_retry(_tx_kline_request, cand, "", "", 30, "")
+            if len(probe) >= _US_TX_PROBE_MIN_ROWS:
+                resolved = cand
+                break
+    if resolved is None:
+        resolved = em_symbol
     _us_tx_code_cache[em_symbol] = resolved
     return resolved
 
