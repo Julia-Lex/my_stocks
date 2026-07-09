@@ -708,6 +708,12 @@ def _fetch_intl_daily_tx(market: str, fetch_symbol: str,
                          adjust: str = "") -> pd.DataFrame:
     """腾讯实现:港/美单只日线。fetch_symbol:港股 '00700'(5 位数字),
     美股 'usAAPL' 形式的 em_symbol(不含交易所后缀,内部自动解析)。
+
+    返回前按 [start,end] 裁剪(与 A 股 _fetch_daily_tx 一致):腾讯按年
+    窗口拉取,若不裁剪,增量调用会把窗口外(拉取起始年年初起)的旧行也
+    upsert 回库,且拉取段首行 pct_chg 为 NaN,会把库里原本正确的值覆盖成
+    NULL。pct_chg 先在完整窗口序列上计算再裁剪,窄窗口首行的 pct_chg 用
+    的是窗口外前一交易日收盘,不再是 NaN。
     """
     cfg = MARKETS[market]
     start = start or cfg["start"]
@@ -727,6 +733,10 @@ def _fetch_intl_daily_tx(market: str, fetch_symbol: str,
     df["pct_chg"] = df["close"].pct_change() * 100
     df["amount"] = pd.NA
     df["turnover"] = pd.NA
+
+    start_d = pd.to_datetime(start).date()
+    end_d = pd.to_datetime(end).date()
+    df = df[(df["trade_date"] >= start_d) & (df["trade_date"] <= end_d)].reset_index(drop=True)
     return df[["trade_date", "open", "high", "low", "close",
                "volume", "amount", "pct_chg", "turnover"]]
 
