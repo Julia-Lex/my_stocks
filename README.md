@@ -49,13 +49,13 @@ export ASTOCK_DB_PASSWORD='你的密码'
 # 如需改 host/port/user/dbname,见 common.py 顶部 DB_CONFIG,或用同名环境变量
 
 # 5) 先小规模试跑(前 50 只),确认接口正常
-python 02_init_load.py --limit 50
+ASTOCK_DB_USER=zhu .venv/bin/python 02_init_load.py --limit 50
 
 # 6) 全量初始化(可 Ctrl-C 中断,重跑自动续)
-python 02_init_load.py
+ASTOCK_DB_USER=zhu .venv/bin/python 02_init_load.py
 
 # 7) 之后每日增量(收盘后)
-python 03_daily_update.py
+ASTOCK_DB_USER=zhu .venv/bin/python 03_daily_update.py
 ```
 
 ### 每日定时(cron 示例)
@@ -114,8 +114,8 @@ ASTOCK_DB_USER=zhu .venv/bin/python 05_init_load_intl.py --market us --workers 3
 每日定时(北京时间;美股收盘为北京次日凌晨,早上拉前一交易日):
 
 ```cron
-0 18 * * 1-5  cd /path/to/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 06_daily_update_intl.py --market hk >> update_hk.log 2>&1
-0 9  * * 2-6  cd /path/to/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 06_daily_update_intl.py --market us >> update_us.log 2>&1
+0 18 * * 1-5  cd /path/to/my_stocks && ASTOCK_DB_USER=zhu ASTOCK_DB_PASSWORD='xxx' .venv/bin/python 06_daily_update_intl.py --market hk >> update_hk.log 2>&1
+0 9  * * 2-6  cd /path/to/my_stocks && ASTOCK_DB_USER=zhu ASTOCK_DB_PASSWORD='xxx' .venv/bin/python 06_daily_update_intl.py --market us >> update_us.log 2>&1
 ```
 
 ## 后续(第二期)
