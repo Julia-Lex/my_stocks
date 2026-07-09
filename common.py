@@ -13,6 +13,7 @@ common.py — 数据库连接、AKShare 拉取与入库的公共层。
 
 from __future__ import annotations
 
+import io
 import logging
 import os
 import time
@@ -22,6 +23,7 @@ from typing import Iterable, Optional, Sequence
 import pandas as pd
 import psycopg2
 import psycopg2.extras
+import requests
 
 # ---------------------------------------------------------------------------
 # 数据库配置
@@ -38,6 +40,10 @@ DB_CONFIG = {
 
 # 指数列表(可自行增删)
 INDEX_LIST = ["sh000001", "sz399001", "sz399006", "sh000300", "sh000905", "sh000016"]
+
+# 港/美股数据源开关:tx = 腾讯(ifzq.gtimg.cn,默认);em = 东财(AKShare,IP 被封禁时不可用)。
+# 背景见 Task 4b:东财 push2his 接口本机被连接级封禁,腾讯 K 线接口实测可达且快。
+INTL_SOURCE = os.getenv("ASTOCK_INTL_SOURCE", "tx")
 
 # ---------------------------------------------------------------------------
 # 日志
@@ -252,6 +258,13 @@ _US_EXCHANGE = {"105": "NASDAQ", "106": "NYSE", "107": "AMEX"}
 
 
 def fetch_hk_stock_list() -> pd.DataFrame:
+    """港股全列表。返回列: stock_code, symbol, name, exchange。按 INTL_SOURCE 分发。"""
+    if INTL_SOURCE == "em":
+        return _fetch_hk_stock_list_em()
+    return _fetch_hk_stock_list_tx()
+
+
+def _fetch_hk_stock_list_em() -> pd.DataFrame:
     """东财港股全列表。返回列: stock_code, symbol, name, exchange。"""
     import akshare as ak
 
@@ -263,7 +276,35 @@ def fetch_hk_stock_list() -> pd.DataFrame:
     return df[["stock_code", "symbol", "name", "exchange"]].drop_duplicates("stock_code")
 
 
+# HKEX 官方全市场证券清单(xlsx)。表头在第 3 行(0-based index=2),
+# 探测结果:列含 Stock Code / Name of Securities / Category 等;
+# Category=='Equity' 即普通股(2809 只,已排除权证/牛熊证/债券/REITs 等)。
+_HKEX_LIST_URL = "https://www.hkex.com.hk/eng/services/trading/securities/securitieslists/ListOfSecurities.xlsx"
+
+
+def _fetch_hk_stock_list_tx() -> pd.DataFrame:
+    """HKEX 官方清单(供腾讯拉数使用,腾讯本身无股票列表接口)。
+    返回列: stock_code, symbol, name, exchange。
+    """
+    resp = with_retry(requests.get, _HKEX_LIST_URL, timeout=30)
+    resp.raise_for_status()
+    df = pd.read_excel(io.BytesIO(resp.content), header=2)
+    df = df[df["Category"] == "Equity"].copy()
+    df["symbol"] = df["Stock Code"].astype(int).astype(str).str.zfill(5)
+    df["stock_code"] = df["symbol"] + ".HK"
+    df["name"] = df["Name of Securities"].astype(str).str.strip()
+    df["exchange"] = "HKEX"
+    return df[["stock_code", "symbol", "name", "exchange"]].drop_duplicates("stock_code")
+
+
 def fetch_us_stock_list(top_n: int = 600) -> pd.DataFrame:
+    """美股列表。返回列: stock_code, symbol, name, exchange, em_symbol。按 INTL_SOURCE 分发。"""
+    if INTL_SOURCE == "em":
+        return _fetch_us_stock_list_em(top_n)
+    return _fetch_us_stock_list_tx()
+
+
+def _fetch_us_stock_list_em(top_n: int = 600) -> pd.DataFrame:
     """
     东财美股列表:总市值前 top_n。
     返回列: stock_code, symbol, name, exchange, em_symbol。
@@ -300,10 +341,117 @@ def fetch_us_stock_list(top_n: int = 600) -> pd.DataFrame:
     return df[["stock_code", "symbol", "name", "exchange", "em_symbol"]]
 
 
+# 腾讯拉数无独立美股清单接口,清单来源改为三路合并:
+#   1) S&P 500 成分股(datasets/s-and-p-500-companies,GitHub raw CSV)
+#   2) 纳指 100 成分股(Wikipedia Nasdaq-100 页面第 7 张表,pd.read_html)
+#   3) 中概股精选清单(硬编码,覆盖上面两路遗漏的知名中概 ADR)
+_SP500_CSV_URL = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
+_NASDAQ100_WIKI_URL = "https://en.wikipedia.org/wiki/Nasdaq-100"
+
+# 精选中概股(symbol -> name)。选取依据:知名度 + 流动性,覆盖电商/出行/教育/
+# 生物医药/金融科技等主要赛道;不追求穷尽(AKShare 东财口径下这些个股市值
+# 均能进前 600,故与 em 路径覆盖大体一致)。
+_CHINA_CONCEPT_STOCKS = {
+    "BABA": "Alibaba Group",
+    "PDD": "PDD Holdings",
+    "JD": "JD.com",
+    "BIDU": "Baidu",
+    "NTES": "NetEase",
+    "TME": "Tencent Music",
+    "BILI": "Bilibili",
+    "NIO": "NIO",
+    "XPEV": "XPeng",
+    "LI": "Li Auto",
+    "TCOM": "Trip.com",
+    "ZTO": "ZTO Express",
+    "YUMC": "Yum China",
+    "BEKE": "KE Holdings",
+    "FUTU": "Futu Holdings",
+    "HTHT": "H World Group",
+    "IQ": "iQIYI",
+    "WB": "Weibo",
+    "VIPS": "Vipshop",
+    "MNSO": "MINISO",
+    "QFIN": "Qifu Technology",
+    "ATHM": "Autohome",
+    "ZLAB": "Zai Lab",
+    "LEGN": "Legend Biotech",
+    "GDS": "GDS Holdings",
+    "BGNE": "BeiGene",
+    "TAL": "TAL Education",
+    "EDU": "New Oriental Education",
+    "BZ": "Kanzhun",
+    # 补充:上面两路(S&P500/纳指100)通常覆盖不到的知名中概
+    "MOMO": "Hello Group",
+    "TIGR": "UP Fintech",
+    "LX": "LexinFintech",
+    "GOTU": "Gaotu Techedu",
+}
+
+
+def _fetch_us_stock_list_tx() -> pd.DataFrame:
+    """三路合并(S&P500 + 纳指100 + 中概精选)。
+    返回列: stock_code, symbol, name, exchange, em_symbol。
+    exchange 字段腾讯路径下不做精确交易所判定(清单阶段逐个探测太慢,
+    详见 fetch_intl_daily 的 tx 实现里的 .OQ/.N 回退逻辑),统一置 'US'。
+    em_symbol 存腾讯拉数代码前缀(不含交易所后缀),如 usAAPL、usBRK.B。
+    """
+    frames = []
+
+    resp = with_retry(requests.get, _SP500_CSV_URL, timeout=20)
+    resp.raise_for_status()
+    sp500 = pd.read_csv(io.StringIO(resp.text))
+    frames.append(sp500.rename(columns={"Symbol": "symbol", "Security": "name"})[["symbol", "name"]])
+
+    resp = with_retry(requests.get, _NASDAQ100_WIKI_URL, timeout=20,
+                      headers={"User-Agent": "Mozilla/5.0"})
+    resp.raise_for_status()
+    tables = pd.read_html(io.StringIO(resp.text))
+    nasdaq100 = None
+    for t in tables:
+        cols = [str(c) for c in t.columns]
+        if "Ticker" in cols and "Company" in cols:
+            nasdaq100 = t.rename(columns={"Ticker": "symbol", "Company": "name"})[["symbol", "name"]]
+            break
+    if nasdaq100 is None:
+        raise RuntimeError("Nasdaq-100 维基页面未找到 Ticker/Company 表,页面结构可能已变化")
+    frames.append(nasdaq100)
+
+    china = pd.DataFrame(
+        {"symbol": list(_CHINA_CONCEPT_STOCKS.keys()),
+         "name": list(_CHINA_CONCEPT_STOCKS.values())}
+    )
+    frames.append(china)
+
+    df = pd.concat(frames, ignore_index=True)
+    df["symbol"] = df["symbol"].astype(str).str.strip()
+    n0 = len(df)
+    df = df.drop_duplicates("symbol")
+    if n0 - len(df) > 0:
+        log.info("fetch_us_stock_list(tx): symbol 去重丢弃 %d 行(S&P500/纳指100/中概重叠)",
+                 n0 - len(df))
+    df["stock_code"] = df["symbol"] + ".US"
+    df["exchange"] = "US"
+    df["em_symbol"] = "us" + df["symbol"]
+    return df[["stock_code", "symbol", "name", "exchange", "em_symbol"]]
+
+
 def fetch_intl_daily(market: str, fetch_symbol: str,
                      start: Optional[str] = None, end: Optional[str] = None,
                      adjust: str = "") -> pd.DataFrame:
-    """港/美单只不复权日线。fetch_symbol:港股 '00700',美股 '105.AAPL'。"""
+    """港/美单只日线。fetch_symbol:港股 '00700';美股 em 源 '105.AAPL',
+    tx 源 'usAAPL'(即 em_symbol,不含交易所后缀,见 fetch_intl_daily 的 tx 实现)。
+    按 INTL_SOURCE 分发。
+    """
+    if INTL_SOURCE == "em":
+        return _fetch_intl_daily_em(market, fetch_symbol, start, end, adjust)
+    return _fetch_intl_daily_tx(market, fetch_symbol, start, end, adjust)
+
+
+def _fetch_intl_daily_em(market: str, fetch_symbol: str,
+                         start: Optional[str] = None, end: Optional[str] = None,
+                         adjust: str = "") -> pd.DataFrame:
+    """东财实现:港/美单只日线。fetch_symbol:港股 '00700',美股 '105.AAPL'。"""
     import akshare as ak
 
     cfg = MARKETS[market]
@@ -321,12 +469,161 @@ def fetch_intl_daily(market: str, fetch_symbol: str,
     return df
 
 
+# ---------------------------------------------------------------------------
+# 腾讯 K 线接口(ifzq.gtimg.cn)—— 探测结论见 .superpowers/sdd/task-4b-report.md:
+#   * 响应结构: {"code":0,"data":{"<code>":{"day":[[date,open,close,high,low,
+#     volume, ...可选尾随字段...], ...]}}} —— 注意字段顺序是
+#     [日期, 开, 收, 高, 低, 量],不是常见的 [开,高,低,收]。
+#   * count 上限:实测 2000 可用、2100 起报 "param error";按 7 年一段
+#     (7*260≈1820 < 2000)分段请求再拼接,足够覆盖任意长历史且不触顶。
+#   * 关键限制(重要发现):fq 参数(qfq/hfq)对港股/美股不生效 —— 服务端
+#     只在 A 股(sz/sh 前缀)代码上才会返回 "hfqday"/"qfqday" 键;港股 hk*、
+#     美股 us* 代码无论 fq 传什么,返回键恒为 "day" 且数值与不复权一致
+#     (已用 00700 的 2014 年 1:5 拆股、AAPL 的 2014 年 7:1 拆股验证:跨拆股
+#     日价格不连续,证明没有做复权)。因此 hk_adj_factor / us_adj_factor
+#     的 adj_factor 目前恒为 1.0 —— 这是数据源本身的限制,不是本实现的
+#     bug;后续若要港/美股真复权因子,需要另找复权/拆股公告数据源。
+# ---------------------------------------------------------------------------
+_TX_KLINE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+_TX_WINDOW_YEARS = 7   # 每段跨度(年),配合 _TX_MAX_COUNT 避免触发 "param error"
+_TX_MAX_COUNT = 2000   # 实测安全上限(2000 可用,2100 报错)
+
+
+def _tx_kline_request(code: str, start: str, end: str,
+                      count: int = _TX_MAX_COUNT, fq: str = "") -> pd.DataFrame:
+    """单次腾讯 K 线请求。start/end 为 'YYYY-MM-DD' 或空串(不限)。
+    返回列: trade_date, open, close, high, low, volume(未复权/未改列名,
+    供上层函数再加工)。
+    """
+    param = f"{code},day,{start},{end},{count},{fq}"
+
+    def _do():
+        resp = requests.get(_TX_KLINE_URL, params={"param": param}, timeout=15)
+        resp.raise_for_status()
+        return resp.json()
+
+    data = with_retry(_do)
+    if data.get("code") != 0:
+        return pd.DataFrame()
+    entry = data.get("data", {}).get(code)
+    if not entry:
+        return pd.DataFrame()
+    # hfq/qfq 对港美股不生效(见上方模块说明),恒为 "day";保留这几个 key 的
+    # 探测顺序以防未来腾讯补上支持。
+    key = "hfqday" if "hfqday" in entry else ("qfqday" if "qfqday" in entry else "day")
+    rows = entry.get(key) or []
+    if not rows:
+        return pd.DataFrame()
+    out = [r[:6] for r in rows]  # 每行前 6 个字段恒为 [date,open,close,high,low,volume]
+    df = pd.DataFrame(out, columns=["trade_date", "open", "close", "high", "low", "volume"])
+    for col in ("open", "close", "high", "low", "volume"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.date
+    return df.dropna(subset=["trade_date"])
+
+
+def _tx_fetch_full(code: str, start_year: int, end_year: int, fq: str = "") -> pd.DataFrame:
+    """按 _TX_WINDOW_YEARS 年一段循环请求并拼接、去重、排序。"""
+    frames = []
+    y = start_year
+    while y <= end_year:
+        y2 = min(y + _TX_WINDOW_YEARS - 1, end_year)
+        df = _tx_kline_request(code, f"{y}-01-01", f"{y2}-12-31", fq=fq)
+        if not df.empty:
+            frames.append(df)
+        y = y2 + 1
+    if not frames:
+        return pd.DataFrame()
+    out = pd.concat(frames, ignore_index=True).drop_duplicates("trade_date").sort_values("trade_date")
+    return out.reset_index(drop=True)
+
+
+# 美股代码后缀解析缓存:清单阶段 em_symbol 不含交易所后缀(如 'usAAPL'),
+# 逐个探测太慢,改为在首次实际拉数时按 "原样 -> .OQ -> .N" 试探并缓存
+# (纳斯达克 = .OQ,纽交所 = .N;已用 AAPL/.OQ、GE/KO/IBM/.N、BABA/PDD/.N/.OQ
+# 等验证)。探测关键:错误后缀不会返回空,而是返回 1~2 行"稀疏假数据"
+# (服务端按裸代码模糊匹配到了真实标的的实时行情,但历史K线只给了极少
+# 缓存行),故不能以"非空"判空,改为"最近 30 天至少拿到 10 行"作为命中标准。
+_US_TX_SUFFIXES = ("", ".OQ", ".N")
+_us_tx_code_cache: dict[str, str] = {}
+
+
+def _tx_resolve_us_code(em_symbol: str) -> str:
+    if em_symbol in _us_tx_code_cache:
+        return _us_tx_code_cache[em_symbol]
+    resolved = em_symbol
+    for suf in _US_TX_SUFFIXES:
+        cand = em_symbol + suf
+        probe = with_retry(_tx_kline_request, cand, "", "", 30, "")
+        if len(probe) >= 10:
+            resolved = cand
+            break
+    _us_tx_code_cache[em_symbol] = resolved
+    return resolved
+
+
+def _fetch_intl_daily_tx(market: str, fetch_symbol: str,
+                         start: Optional[str] = None, end: Optional[str] = None,
+                         adjust: str = "") -> pd.DataFrame:
+    """腾讯实现:港/美单只日线。fetch_symbol:港股 '00700'(5 位数字),
+    美股 'usAAPL' 形式的 em_symbol(不含交易所后缀,内部自动解析)。
+    """
+    cfg = MARKETS[market]
+    start = start or cfg["start"]
+    end = end or datetime.now().strftime("%Y%m%d")
+    start_year = int(str(start)[:4])
+    end_year = int(str(end)[:4])
+
+    if market == "hk":
+        code = "hk" + str(fetch_symbol).zfill(5)
+    else:
+        code = _tx_resolve_us_code(fetch_symbol)
+
+    df = _tx_fetch_full(code, start_year, end_year, fq=adjust)
+    if df.empty:
+        return pd.DataFrame()
+    df = df.sort_values("trade_date").reset_index(drop=True)
+    df["pct_chg"] = df["close"].pct_change() * 100
+    df["amount"] = pd.NA
+    df["turnover"] = pd.NA
+    return df[["trade_date", "open", "high", "low", "close",
+               "volume", "amount", "pct_chg", "turnover"]]
+
+
 def fetch_intl_hfq_factor(market: str, fetch_symbol: str,
                           raw: Optional[pd.DataFrame] = None) -> pd.DataFrame:
-    """后复权因子 = hfq 收盘 ÷ 原始收盘。raw 可传入已拉取的不复权日线省一次请求。"""
+    """后复权因子 = hfq 收盘 ÷ 原始收盘。raw 可传入已拉取的不复权日线省一次请求。
+    按 INTL_SOURCE 分发。
+    """
+    if INTL_SOURCE == "em":
+        return _fetch_intl_hfq_factor_em(market, fetch_symbol, raw)
+    return _fetch_intl_hfq_factor_tx(market, fetch_symbol, raw)
+
+
+def _fetch_intl_hfq_factor_em(market: str, fetch_symbol: str,
+                              raw: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     if raw is None:
-        raw = fetch_intl_daily(market, fetch_symbol)
-    hfq = fetch_intl_daily(market, fetch_symbol, adjust="hfq")
+        raw = _fetch_intl_daily_em(market, fetch_symbol)
+    hfq = _fetch_intl_daily_em(market, fetch_symbol, adjust="hfq")
+    if raw.empty or hfq.empty:
+        return pd.DataFrame()
+    merged = raw[["trade_date", "close"]].merge(
+        hfq[["trade_date", "close"]], on="trade_date", suffixes=("_raw", "_hfq"))
+    merged = merged[merged["close_raw"] > 0]
+    merged["adj_factor"] = merged["close_hfq"] / merged["close_raw"]
+    return merged[["trade_date", "adj_factor"]].dropna()
+
+
+def _fetch_intl_hfq_factor_tx(market: str, fetch_symbol: str,
+                              raw: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    """腾讯实现,同 em 版沿用 hfq close ÷ raw close 的 merge 逻辑。
+    注意:腾讯 fq 参数对港/美股不生效(见 _tx_kline_request 上方说明),
+    hfq 序列与 raw 序列在数值上恒等,故这里算出的 adj_factor 恒为 1.0 ——
+    如实体现数据源限制,不做额外处理(是否需要真实复权因子由后续决策)。
+    """
+    if raw is None:
+        raw = _fetch_intl_daily_tx(market, fetch_symbol)
+    hfq = _fetch_intl_daily_tx(market, fetch_symbol, adjust="hfq")
     if raw.empty or hfq.empty:
         return pd.DataFrame()
     merged = raw[["trade_date", "close"]].merge(
