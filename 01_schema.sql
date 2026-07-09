@@ -7,7 +7,7 @@
 --   2. daily_price 按年度 RANGE 分区(1990~2030),主键 (stock_code, trade_date)。
 --      另建 (trade_date, stock_code) 反向索引,支持整市场截面查询。
 --   3. 股票代码统一带交易所后缀:000001.SZ / 600000.SH / 830799.BJ。
---   4. 价格一律 NUMERIC,不用 FLOAT;成交量单位为「手」(1 手 = 100 股)。
+--   4. 价格一律 NUMERIC,不用 FLOAT;成交量单位为「股」(三市场统一;东财/腾讯 A 股原始为手,入库层换算)。
 --   5. 周线/月线不单独拉取,从后复权日线用物化视图派生(单一事实来源)。
 --
 -- 用法:
@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS daily_price (
     low        NUMERIC(12,3),
     close      NUMERIC(12,3),
     pre_close  NUMERIC(12,3),
-    volume     BIGINT,          -- 成交量,单位:手
+    volume     BIGINT,          -- 成交量,单位:股(2026-07-09 起全库统一;源返回"手"时在入库层 ×100)
     amount     NUMERIC(20,3),   -- 成交额,单位:元
     pct_chg    NUMERIC(10,4),   -- 涨跌幅 %
     turnover   NUMERIC(10,4),   -- 换手率 %

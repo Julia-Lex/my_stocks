@@ -120,7 +120,7 @@ RENAME_HIST = {
     "收盘": "close",
     "最高": "high",
     "最低": "low",
-    "成交量": "volume",   # 单位:手
+    "成交量": "volume",   # 东财原始单位:手;入库前统一换算为股(见 _fetch_daily_em)
     "成交额": "amount",   # 单位:元
     "涨跌幅": "pct_chg",
     "换手率": "turnover",
@@ -185,6 +185,9 @@ def _fetch_daily_em(symbol: str, start: str = "19900101", end: Optional[str] = N
     keep = [c for c in RENAME_HIST.values() if c in df.columns]
     df = df[keep].copy()
     df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
+    # 东财成交量单位是手;全库(A/HK/US)统一存股(2026-07-09 起,历史数据已换算)
+    if "volume" in df.columns:
+        df["volume"] = df["volume"] * 100
     return df
 
 
@@ -635,6 +638,9 @@ def _fetch_daily_tx(symbol: str, start: str = "19900101", end: Optional[str] = N
         return pd.DataFrame()
     df = df.sort_values("trade_date").reset_index(drop=True)
     df["pct_chg"] = df["close"].pct_change() * 100
+    # 腾讯 A 股 K 线成交量单位是手(实测 000001 与东财原始值一致);
+    # 全库统一存股,×100 换算。注意:港/美(_fetch_intl_daily_tx)原生就是股,不换算。
+    df["volume"] = df["volume"] * 100
     df["amount"] = pd.NA
     df["turnover"] = pd.NA
 
