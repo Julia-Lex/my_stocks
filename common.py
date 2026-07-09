@@ -45,6 +45,12 @@ INDEX_LIST = ["sh000001", "sz399001", "sz399006", "sh000300", "sh000905", "sh000
 # 背景见 Task 4b:东财 push2his 接口本机被连接级封禁,腾讯 K 线接口实测可达且快。
 INTL_SOURCE = os.getenv("ASTOCK_INTL_SOURCE", "tx")
 
+# A 股日线数据源开关:em = 东财(AKShare,默认、主源);tx = 腾讯(备源,仅东财
+# IP 被封时手动切换)。与 INTL_SOURCE 默认值故意不同——东财是 A 股的主力
+# 数据源(历史深度、字段完整度均优于腾讯:腾讯 A 股 day 数组只有 6 个字段,
+# 无成交额/换手率),只有东财整体不可用时才应设 ASTOCK_ASHARE_SOURCE=tx 应急。
+ASHARE_SOURCE = os.getenv("ASTOCK_ASHARE_SOURCE", "em")
+
 # ---------------------------------------------------------------------------
 # 日志
 # ---------------------------------------------------------------------------
@@ -155,7 +161,15 @@ def fetch_daily(symbol: str, start: str = "19900101", end: Optional[str] = None)
     """
     单只股票不复权日线。start/end 格式 'YYYYMMDD'。
     返回列: trade_date, open, high, low, close, volume, amount, pct_chg, turnover。
+    按 ASHARE_SOURCE 分发(默认 em;东财被封时可设 ASTOCK_ASHARE_SOURCE=tx 切腾讯备源)。
     """
+    if ASHARE_SOURCE == "tx":
+        return _fetch_daily_tx(symbol, start, end)
+    return _fetch_daily_em(symbol, start, end)
+
+
+def _fetch_daily_em(symbol: str, start: str = "19900101", end: Optional[str] = None) -> pd.DataFrame:
+    """东财实现(主源):单只股票不复权日线。start/end 格式 'YYYYMMDD'。"""
     import akshare as ak
 
     end = end or datetime.now().strftime("%Y%m%d")
@@ -536,6 +550,46 @@ def _tx_fetch_full(code: str, start_year: int, end_year: int, fq: str = "") -> p
         return pd.DataFrame()
     out = pd.concat(frames, ignore_index=True).drop_duplicates("trade_date").sort_values("trade_date")
     return out.reset_index(drop=True)
+
+
+def _fetch_daily_tx(symbol: str, start: str = "19900101", end: Optional[str] = None) -> pd.DataFrame:
+    """腾讯实现(备源,仅东财被封时用):单只 A 股不复权日线。
+
+    symbol 经 to_sina_code 转腾讯 A 股代码(600000 -> sh600000,000001 ->
+    sz000001,830799 -> bj830799),复用 _tx_fetch_full 的 7 年窗口分页基础
+    设施(fq="" 走不复权 "day" 键;A 股代码下腾讯服务端也支持 "hfqday"/
+    "qfqday",但本函数只取不复权价,复权因子仍固定走新浪 fetch_hfq_factor)。
+
+    amount(成交额):_tx_kline_request 按现有实现只解析每行前 6 个字段
+    [日期,开,收,高,低,量](见该函数顶部说明);HK/US 场景下已确认偶发的
+    第 7 个字段是除权除息公告 dict,不是数值。本次未能对 A 股 sh/sz 代码的
+    原始响应做实地探测复核(验证时腾讯接口对本机 IP 返回 501/WAF 拦截,
+    详见任务报告"疑虑"一节),按现有 6 字段实现保守处理,固定置 NULL,
+    与 _fetch_intl_daily_tx 对 HK/US 的处理一致;若后续证实 A 股行确有
+    成交额字段,需要改造 _tx_kline_request 保留原始行尾部再在此提取。
+    turnover(换手率)腾讯无对应字段来源,同样固定 NULL。
+    pct_chg 本地用 close.pct_change()*100 计算(东财返回的涨跌幅是精确值,
+    腾讯没有对应字段,只能反算;边界:窗口内第一行相对上一个自然年末尾
+    交易日计算,过滤到 [start,end] 之前先算好,避免窄窗口首行 pct_chg 为 NaN)。
+    """
+    end = end or datetime.now().strftime("%Y%m%d")
+    code = to_sina_code(symbol)
+    start_year = int(str(start)[:4])
+    end_year = int(str(end)[:4])
+
+    df = _tx_fetch_full(code, start_year, end_year, fq="")
+    if df.empty:
+        return pd.DataFrame()
+    df = df.sort_values("trade_date").reset_index(drop=True)
+    df["pct_chg"] = df["close"].pct_change() * 100
+    df["amount"] = pd.NA
+    df["turnover"] = pd.NA
+
+    start_d = pd.to_datetime(start).date()
+    end_d = pd.to_datetime(end).date()
+    df = df[(df["trade_date"] >= start_d) & (df["trade_date"] <= end_d)].reset_index(drop=True)
+    return df[["trade_date", "open", "high", "low", "close",
+               "volume", "amount", "pct_chg", "turnover"]]
 
 
 # 美股代码后缀解析缓存:清单阶段 em_symbol 不含交易所后缀(如 'usAAPL'),

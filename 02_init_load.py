@@ -65,7 +65,7 @@ def load_one_stock(conn, stock_code: str, symbol: str) -> None:
 
     last = daily["trade_date"].max() if not daily.empty else None
     c.mark_progress(conn, TASK, stock_code, last, status="done",
-                    message=f"daily={n_daily},adj={n_adj}")
+                    message=f"src={c.ASHARE_SOURCE},daily={n_daily},adj={n_adj}")
     c.log.info("  %s: 日线 %d / 因子 %d", stock_code, n_daily, n_adj)
 
 
