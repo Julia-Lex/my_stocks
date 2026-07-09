@@ -265,31 +265,39 @@ def fetch_hk_stock_list() -> pd.DataFrame:
 
 def fetch_us_stock_list(top_n: int = 600) -> pd.DataFrame:
     """
-    东财美股列表:总市值前 top_n + 知名中概股,去重。
+    东财美股列表:总市值前 top_n。
     返回列: stock_code, symbol, name, exchange, em_symbol。
-    中概接口不可用时仅用市值前 top_n(其已覆盖主要中概)。
+
+    中概股覆盖依赖市值前 top_n:本机 akshare(1.18.64)没有独立的
+    中概股列表接口(stock_us_famous_spot_em 仅支持 6 个固定类目、
+    不含"中概股";历史上的 stock_us_zh_spot 已被移除),而主要中概
+    (BABA/PDD/JD/NTES 等)市值均在前 600 之内,故不做补充拉取。
     """
     import akshare as ak
 
     spot = with_retry(ak.stock_us_spot_em)
     spot = spot.rename(columns={"代码": "em_symbol", "名称": "name", "总市值": "mktcap"})
     spot["mktcap"] = pd.to_numeric(spot["mktcap"], errors="coerce")
-    frames = [spot.dropna(subset=["mktcap"])
-                  .sort_values("mktcap", ascending=False).head(top_n)[["em_symbol", "name"]]]
-    try:
-        zh = with_retry(ak.stock_us_famous_spot_em, symbol="中概股")
-        zh = zh.rename(columns={"代码": "em_symbol", "名称": "name"})
-        frames.append(zh[["em_symbol", "name"]])
-    except Exception as exc:  # noqa: BLE001
-        log.warning("知名中概股接口不可用,仅用市值前 %d: %s", top_n, exc)
+    log.warning("美股清单无独立中概股列表接口,中概覆盖依赖市值前 %d", top_n)
 
-    df = pd.concat(frames, ignore_index=True).drop_duplicates("em_symbol")
+    # 先按市值降序再去重:重复时保留的是市值榜(排名靠前)那一行,不会误删合法中概
+    df = (spot.dropna(subset=["mktcap"])
+              .sort_values("mktcap", ascending=False)
+              .head(top_n)[["em_symbol", "name"]]
+              .copy())
     df["em_symbol"] = df["em_symbol"].astype(str)
+    n0 = len(df)
+    df = df.drop_duplicates("em_symbol")
+    if n0 - len(df) > 0:
+        log.info("fetch_us_stock_list: em_symbol 去重丢弃 %d 行", n0 - len(df))
     df["symbol"] = df["em_symbol"].str.split(".").str[-1]
     df["stock_code"] = df["symbol"] + ".US"
     df["exchange"] = df["em_symbol"].str.split(".").str[0].map(_US_EXCHANGE).fillna("US")
-    return df.drop_duplicates("stock_code")[
-        ["stock_code", "symbol", "name", "exchange", "em_symbol"]]
+    n1 = len(df)
+    df = df.drop_duplicates("stock_code")
+    if n1 - len(df) > 0:
+        log.info("fetch_us_stock_list: stock_code 去重丢弃 %d 行(跨交易所同名代码)", n1 - len(df))
+    return df[["stock_code", "symbol", "name", "exchange", "em_symbol"]]
 
 
 def fetch_intl_daily(market: str, fetch_symbol: str,
