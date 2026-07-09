@@ -631,15 +631,21 @@ def _fetch_intl_hfq_factor_tx(market: str, fetch_symbol: str,
     不影响拆股场景的连续性(已用 00700 2014-05 一拆五验证,见 task-4c 报告)。
 
     美股:ak.stock_us_daily 没有 hfq-factor,只有 qfq-factor(锚点在最新
-    交易日=1、逐笔递减)。**qfq_factor 要直接当 adj_factor 用,不能取倒数**——
+    交易日=1、逐笔递减)。**qfq_factor 要直接当乘法因子用,不能取倒数**——
     实测取倒数会在拆股日制造出巨大的人为价格跳变(以 AAPL 2020-08-31
     四拆一为例:直接使用 close*qfq_factor 在拆股前后连续、偏差约 3.4%;
     取倒数 close*(1/qfq_factor) 则从约 1997 跳到 129,偏差 1447%,详见
-    task-4c 报告的实测数字)。qfq_factor 锚点虽在最新日而非最早日,但
-    daily_price_hfq/qfq 视图只关心「按日取最近因子相乘」这一相对关系,
-    锚点位置不影响复权后的日间收益率、也不影响跨拆股连续性,数学上与本库
-    其余 hfq 因子的用法等价。同样忽略了 "adjust" 累计分红调整列(简化,
-    理由同港股)。symbol 需去掉 em_symbol 的 "us" 前缀 —— 新浪美股接口用
+    task-4c 报告的实测数字)。
+
+    锚点重标定(Task 4c 复审修复):本库三市场统一「最早日因子=1、逐笔
+    递增」的锚点约定(A 股新浪 hfq-factor、港股新浪 hfq-factor 天然如此)。
+    新浪美股 qfq_factor 锚点却在最新日(最新一行恒为 1)——若原样入库,
+    *_daily_price_qfq 视图里「除以该股最新因子」退化为除以 1,导致
+    us hfq/qfq 两视图逐行恒等(复审实测确认)。故入库前整段除以最早一行
+    的因子值重锚定为「最早日=1」。这是线性重标定,不改变任何日间相对关系,
+    拆股连续性不受影响;重锚后最新因子≈累计拆股倍数(AAPL 约 224),
+    NUMERIC(18,6) 足够。同样忽略了 "adjust" 累计分红调整列(简化,理由同
+    港股)。symbol 需去掉 em_symbol 的 "us" 前缀 —— 新浪美股接口用
     裸 ticker(如 "AAPL"/"BRK.B"),不接受 "usAAPL"(实测 IndexError)。
     """
     import akshare as ak
@@ -664,8 +670,13 @@ def _fetch_intl_hfq_factor_tx(market: str, fetch_symbol: str,
     df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
     df["adj_factor"] = pd.to_numeric(df["adj_factor"], errors="coerce")
     df = df[df["adj_factor"] > 0]   # 防御性过滤,避免脏数据/0 传导到下游视图
-    return (df[["trade_date", "adj_factor"]].dropna()
-              .sort_values("trade_date").reset_index(drop=True))
+    df = (df[["trade_date", "adj_factor"]].dropna()
+            .sort_values("trade_date").reset_index(drop=True))
+    if df.empty:
+        return df
+    # 重锚定:最早日=1,与 A 股/港股约定一致(见 docstring「锚点重标定」)
+    df["adj_factor"] = df["adj_factor"] / df["adj_factor"].iloc[0]
+    return df
 
 
 def fetch_intl_index(market: str, index_code: str) -> pd.DataFrame:
