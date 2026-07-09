@@ -269,3 +269,14 @@ GROUP BY stock_code, date_trunc('month', trade_date);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_us_monthly_hfq_pk
     ON us_monthly_price_hfq (stock_code, period_start);
+
+-- ---------------------------------------------------------------------------
+-- 兼容性修正
+-- ---------------------------------------------------------------------------
+-- etl_progress 复用于港/美股断点续传;美股代码最长可到 16 位(如 GOOGL.US),
+-- 原 VARCHAR(12) 不够,统一放宽到 VARCHAR(16)。
+ALTER TABLE etl_progress ALTER COLUMN stock_code TYPE VARCHAR(16);
+
+-- 补齐与 01_schema.sql 同构的 is_active 索引
+CREATE INDEX IF NOT EXISTS idx_hk_stock_basic_active ON hk_stock_basic (is_active);
+CREATE INDEX IF NOT EXISTS idx_us_stock_basic_active ON us_stock_basic (is_active);
