@@ -230,6 +230,134 @@ def fetch_index(index_code: str) -> pd.DataFrame:
 
 
 # ===========================================================================
+# 港股 / 美股(方案 B 分表)。表前缀、拉数函数按 MARKETS 配置分发。
+# 成交量单位:股;货币按表隐含(hk_*=HKD,us_*=USD)。
+# ===========================================================================
+MARKETS = {
+    "hk": {
+        "prefix": "hk_", "suffix": ".HK",
+        "indexes": ["HSI", "HSTECH"],          # 以 Task3 Step1 探测结果为准
+        "start": "19800101",
+        "mviews": ("hk_weekly_price_hfq", "hk_monthly_price_hfq"),
+    },
+    "us": {
+        "prefix": "us_", "suffix": ".US",
+        "indexes": [".INX", ".IXIC", ".DJI"],
+        "start": "19700101",
+        "mviews": ("us_weekly_price_hfq", "us_monthly_price_hfq"),
+    },
+}
+
+_US_EXCHANGE = {"105": "NASDAQ", "106": "NYSE", "107": "AMEX"}
+
+
+def fetch_hk_stock_list() -> pd.DataFrame:
+    """东财港股全列表。返回列: stock_code, symbol, name, exchange。"""
+    import akshare as ak
+
+    df = with_retry(ak.stock_hk_spot_em)
+    df = df.rename(columns={"代码": "symbol", "名称": "name"})
+    df["symbol"] = df["symbol"].astype(str).str.zfill(5)
+    df["stock_code"] = df["symbol"] + ".HK"
+    df["exchange"] = "HKEX"
+    return df[["stock_code", "symbol", "name", "exchange"]].drop_duplicates("stock_code")
+
+
+def fetch_us_stock_list(top_n: int = 600) -> pd.DataFrame:
+    """
+    东财美股列表:总市值前 top_n + 知名中概股,去重。
+    返回列: stock_code, symbol, name, exchange, em_symbol。
+    中概接口不可用时仅用市值前 top_n(其已覆盖主要中概)。
+    """
+    import akshare as ak
+
+    spot = with_retry(ak.stock_us_spot_em)
+    spot = spot.rename(columns={"代码": "em_symbol", "名称": "name", "总市值": "mktcap"})
+    spot["mktcap"] = pd.to_numeric(spot["mktcap"], errors="coerce")
+    frames = [spot.dropna(subset=["mktcap"])
+                  .sort_values("mktcap", ascending=False).head(top_n)[["em_symbol", "name"]]]
+    try:
+        zh = with_retry(ak.stock_us_famous_spot_em, symbol="中概股")
+        zh = zh.rename(columns={"代码": "em_symbol", "名称": "name"})
+        frames.append(zh[["em_symbol", "name"]])
+    except Exception as exc:  # noqa: BLE001
+        log.warning("知名中概股接口不可用,仅用市值前 %d: %s", top_n, exc)
+
+    df = pd.concat(frames, ignore_index=True).drop_duplicates("em_symbol")
+    df["em_symbol"] = df["em_symbol"].astype(str)
+    df["symbol"] = df["em_symbol"].str.split(".").str[-1]
+    df["stock_code"] = df["symbol"] + ".US"
+    df["exchange"] = df["em_symbol"].str.split(".").str[0].map(_US_EXCHANGE).fillna("US")
+    return df.drop_duplicates("stock_code")[
+        ["stock_code", "symbol", "name", "exchange", "em_symbol"]]
+
+
+def fetch_intl_daily(market: str, fetch_symbol: str,
+                     start: Optional[str] = None, end: Optional[str] = None,
+                     adjust: str = "") -> pd.DataFrame:
+    """港/美单只不复权日线。fetch_symbol:港股 '00700',美股 '105.AAPL'。"""
+    import akshare as ak
+
+    cfg = MARKETS[market]
+    start = start or cfg["start"]
+    end = end or datetime.now().strftime("%Y%m%d")
+    fn = ak.stock_hk_hist if market == "hk" else ak.stock_us_hist
+    df = with_retry(fn, symbol=fetch_symbol, period="daily",
+                    start_date=start, end_date=end, adjust=adjust)
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.rename(columns=RENAME_HIST)
+    keep = [c for c in RENAME_HIST.values() if c in df.columns]
+    df = df[keep].copy()
+    df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
+    return df
+
+
+def fetch_intl_hfq_factor(market: str, fetch_symbol: str,
+                          raw: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    """后复权因子 = hfq 收盘 ÷ 原始收盘。raw 可传入已拉取的不复权日线省一次请求。"""
+    if raw is None:
+        raw = fetch_intl_daily(market, fetch_symbol)
+    hfq = fetch_intl_daily(market, fetch_symbol, adjust="hfq")
+    if raw.empty or hfq.empty:
+        return pd.DataFrame()
+    merged = raw[["trade_date", "close"]].merge(
+        hfq[["trade_date", "close"]], on="trade_date", suffixes=("_raw", "_hfq"))
+    merged = merged[merged["close_raw"] > 0]
+    merged["adj_factor"] = merged["close_hfq"] / merged["close_raw"]
+    return merged[["trade_date", "adj_factor"]].dropna()
+
+
+def fetch_intl_index(market: str, index_code: str) -> pd.DataFrame:
+    """港/美指数日线。港:HSI 等;美:.INX/.IXIC/.DJI(新浪代码)。"""
+    import akshare as ak
+
+    if market == "hk":
+        df = with_retry(ak.stock_hk_index_daily_sina, symbol=index_code)  # 以探测结果为准
+    else:
+        df = with_retry(ak.index_us_stock_sina, symbol=index_code)
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.rename(columns=RENAME_INDEX)
+    df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
+    keep = [c for c in ["trade_date", "open", "high", "low", "close", "volume", "amount"]
+            if c in df.columns]
+    return df[keep].copy()
+
+
+def rebuild_intl_calendar(conn, market: str) -> None:
+    """交易日历 = 指数日线出现过的日期(设计:从指数派生,无独立日历源)。"""
+    p = MARKETS[market]["prefix"]
+    with conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {p}trade_calendar (trade_date, is_open) "
+            f"SELECT DISTINCT trade_date, TRUE FROM {p}index_daily "
+            f"ON CONFLICT (trade_date) DO NOTHING"
+        )
+    conn.commit()
+
+
+# ===========================================================================
 # 入库(upsert)
 # ===========================================================================
 def upsert(conn, table: str, cols: Sequence[str], rows: Iterable[Sequence],
@@ -262,7 +390,7 @@ def upsert(conn, table: str, cols: Sequence[str], rows: Iterable[Sequence],
     return len(rows)
 
 
-def upsert_daily(conn, stock_code: str, df: pd.DataFrame) -> int:
+def upsert_daily(conn, stock_code: str, df: pd.DataFrame, table: str = "daily_price") -> int:
     if df.empty:
         return 0
     cols = ["stock_code", "trade_date", "open", "high", "low", "close",
@@ -273,18 +401,18 @@ def upsert_daily(conn, stock_code: str, df: pd.DataFrame) -> int:
          _int(r, "volume"), _num(r, "amount"), _num(r, "pct_chg"), _num(r, "turnover"))
         for r in df.itertuples(index=False)
     ]
-    return upsert(conn, "daily_price", cols, rows, ["stock_code", "trade_date"])
+    return upsert(conn, table, cols, rows, ["stock_code", "trade_date"])
 
 
-def upsert_adj_factor(conn, stock_code: str, df: pd.DataFrame) -> int:
+def upsert_adj_factor(conn, stock_code: str, df: pd.DataFrame, table: str = "adj_factor") -> int:
     if df.empty:
         return 0
     cols = ["stock_code", "trade_date", "adj_factor"]
     rows = [(stock_code, r.trade_date, float(r.adj_factor)) for r in df.itertuples(index=False)]
-    return upsert(conn, "adj_factor", cols, rows, ["stock_code", "trade_date"])
+    return upsert(conn, table, cols, rows, ["stock_code", "trade_date"])
 
 
-def upsert_index(conn, index_code: str, df: pd.DataFrame) -> int:
+def upsert_index(conn, index_code: str, df: pd.DataFrame, table: str = "index_daily") -> int:
     if df.empty:
         return 0
     cols = ["index_code", "trade_date", "open", "high", "low", "close", "volume", "amount"]
@@ -294,7 +422,7 @@ def upsert_index(conn, index_code: str, df: pd.DataFrame) -> int:
          _int(r, "volume"), _num(r, "amount"))
         for r in df.itertuples(index=False)
     ]
-    return upsert(conn, "index_daily", cols, rows, ["index_code", "trade_date"])
+    return upsert(conn, table, cols, rows, ["index_code", "trade_date"])
 
 
 # ---------------------------------------------------------------------------
@@ -319,20 +447,21 @@ def get_done_codes(conn, task: str) -> set[str]:
         return {r[0] for r in cur.fetchall()}
 
 
-def get_max_trade_date(conn, stock_code: Optional[str] = None) -> Optional[date]:
+def get_max_trade_date(conn, stock_code: Optional[str] = None,
+                       table: str = "daily_price") -> Optional[date]:
     with conn.cursor() as cur:
         if stock_code:
-            cur.execute("SELECT max(trade_date) FROM daily_price WHERE stock_code = %s", (stock_code,))
+            cur.execute(f"SELECT max(trade_date) FROM {table} WHERE stock_code = %s", (stock_code,))
         else:
-            cur.execute("SELECT max(trade_date) FROM daily_price")
+            cur.execute(f"SELECT max(trade_date) FROM {table}")
         row = cur.fetchone()
         return row[0] if row else None
 
 
-def refresh_matviews(conn) -> None:
+def refresh_matviews(conn, names: Sequence[str] = ("weekly_price_hfq", "monthly_price_hfq")) -> None:
     """刷新周线/月线物化视图。"""
     with conn.cursor() as cur:
-        for mv in ("weekly_price_hfq", "monthly_price_hfq"):
+        for mv in names:
             try:
                 cur.execute(f"REFRESH MATERIALIZED VIEW CONCURRENTLY {mv}")
             except psycopg2.Error:
