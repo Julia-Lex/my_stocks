@@ -76,16 +76,23 @@ CREATE TABLE IF NOT EXISTS hk_index_daily (
     PRIMARY KEY (index_code, trade_date)
 );
 
+-- hk_adj_factor 是稀疏表(仅除权除息日有行),同 A 股改为前向填充(见
+-- 01_schema.sql 顶部说明),查不到因子记为 1。
 CREATE OR REPLACE VIEW hk_daily_price_hfq AS
 SELECT
     d.stock_code, d.trade_date,
-    round(d.open  * a.adj_factor, 3) AS open,
-    round(d.high  * a.adj_factor, 3) AS high,
-    round(d.low   * a.adj_factor, 3) AS low,
-    round(d.close * a.adj_factor, 3) AS close,
+    round(d.open  * f.factor, 3) AS open,
+    round(d.high  * f.factor, 3) AS high,
+    round(d.low   * f.factor, 3) AS low,
+    round(d.close * f.factor, 3) AS close,
     d.volume, d.amount, d.pct_chg, d.turnover
 FROM hk_daily_price d
-JOIN hk_adj_factor a USING (stock_code, trade_date);
+LEFT JOIN LATERAL (
+    SELECT a.adj_factor AS factor FROM hk_adj_factor a
+    WHERE a.stock_code = d.stock_code AND a.trade_date <= d.trade_date
+    ORDER BY a.trade_date DESC LIMIT 1
+) f0 ON true
+CROSS JOIN LATERAL (SELECT coalesce(f0.factor, 1) AS factor) f;
 
 CREATE OR REPLACE VIEW hk_daily_price_qfq AS
 WITH latest AS (
@@ -94,14 +101,19 @@ WITH latest AS (
 )
 SELECT
     d.stock_code, d.trade_date,
-    round(d.open  * a.adj_factor / l.f, 3) AS open,
-    round(d.high  * a.adj_factor / l.f, 3) AS high,
-    round(d.low   * a.adj_factor / l.f, 3) AS low,
-    round(d.close * a.adj_factor / l.f, 3) AS close,
+    round(d.open  * f.factor / coalesce(l.f, 1), 3) AS open,
+    round(d.high  * f.factor / coalesce(l.f, 1), 3) AS high,
+    round(d.low   * f.factor / coalesce(l.f, 1), 3) AS low,
+    round(d.close * f.factor / coalesce(l.f, 1), 3) AS close,
     d.volume, d.amount, d.pct_chg, d.turnover
 FROM hk_daily_price d
-JOIN hk_adj_factor a USING (stock_code, trade_date)
-JOIN latest     l USING (stock_code);
+LEFT JOIN LATERAL (
+    SELECT a.adj_factor AS factor FROM hk_adj_factor a
+    WHERE a.stock_code = d.stock_code AND a.trade_date <= d.trade_date
+    ORDER BY a.trade_date DESC LIMIT 1
+) f0 ON true
+CROSS JOIN LATERAL (SELECT coalesce(f0.factor, 1) AS factor) f
+LEFT JOIN latest l ON l.stock_code = d.stock_code;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS hk_weekly_price_hfq AS
 SELECT
@@ -209,16 +221,23 @@ CREATE TABLE IF NOT EXISTS us_index_daily (
     PRIMARY KEY (index_code, trade_date)
 );
 
+-- us_adj_factor 是稀疏表(仅除权除息日有行),同 A 股改为前向填充(见
+-- 01_schema.sql 顶部说明),查不到因子记为 1。
 CREATE OR REPLACE VIEW us_daily_price_hfq AS
 SELECT
     d.stock_code, d.trade_date,
-    round(d.open  * a.adj_factor, 3) AS open,
-    round(d.high  * a.adj_factor, 3) AS high,
-    round(d.low   * a.adj_factor, 3) AS low,
-    round(d.close * a.adj_factor, 3) AS close,
+    round(d.open  * f.factor, 3) AS open,
+    round(d.high  * f.factor, 3) AS high,
+    round(d.low   * f.factor, 3) AS low,
+    round(d.close * f.factor, 3) AS close,
     d.volume, d.amount, d.pct_chg, d.turnover
 FROM us_daily_price d
-JOIN us_adj_factor a USING (stock_code, trade_date);
+LEFT JOIN LATERAL (
+    SELECT a.adj_factor AS factor FROM us_adj_factor a
+    WHERE a.stock_code = d.stock_code AND a.trade_date <= d.trade_date
+    ORDER BY a.trade_date DESC LIMIT 1
+) f0 ON true
+CROSS JOIN LATERAL (SELECT coalesce(f0.factor, 1) AS factor) f;
 
 CREATE OR REPLACE VIEW us_daily_price_qfq AS
 WITH latest AS (
@@ -227,14 +246,19 @@ WITH latest AS (
 )
 SELECT
     d.stock_code, d.trade_date,
-    round(d.open  * a.adj_factor / l.f, 3) AS open,
-    round(d.high  * a.adj_factor / l.f, 3) AS high,
-    round(d.low   * a.adj_factor / l.f, 3) AS low,
-    round(d.close * a.adj_factor / l.f, 3) AS close,
+    round(d.open  * f.factor / coalesce(l.f, 1), 3) AS open,
+    round(d.high  * f.factor / coalesce(l.f, 1), 3) AS high,
+    round(d.low   * f.factor / coalesce(l.f, 1), 3) AS low,
+    round(d.close * f.factor / coalesce(l.f, 1), 3) AS close,
     d.volume, d.amount, d.pct_chg, d.turnover
 FROM us_daily_price d
-JOIN us_adj_factor a USING (stock_code, trade_date)
-JOIN latest     l USING (stock_code);
+LEFT JOIN LATERAL (
+    SELECT a.adj_factor AS factor FROM us_adj_factor a
+    WHERE a.stock_code = d.stock_code AND a.trade_date <= d.trade_date
+    ORDER BY a.trade_date DESC LIMIT 1
+) f0 ON true
+CROSS JOIN LATERAL (SELECT coalesce(f0.factor, 1) AS factor) f
+LEFT JOIN latest l ON l.stock_code = d.stock_code;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS us_weekly_price_hfq AS
 SELECT

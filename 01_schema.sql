@@ -118,24 +118,30 @@ CREATE TABLE IF NOT EXISTS etl_progress (
 -- ===========================================================================
 -- 复权视图:原始价 × 因子动态计算
 -- ===========================================================================
+-- 重要:adj_factor 是「稀疏」表 —— 只在除权除息日才有一行,平常交易日没有
+-- 对应记录。早期版本用 JOIN ... USING (stock_code, trade_date) 精确匹配,
+-- 导致视图只吐出除权日那几行(如 000001.SZ 8432 个交易日,精确匹配版视图
+-- 只剩 30 行)。改为 LEFT JOIN LATERAL 前向填充:每个交易日取「≤ 该日」的
+-- 最近一个因子,查不到则视为 1(尚未发生过除权除息,不复权=复权)。
 
--- 后复权:直接乘以后复权因子
+-- 后复权:原始价 × 「当日为止最近」的后复权因子(前向填充,查不到记为 1)
 CREATE OR REPLACE VIEW daily_price_hfq AS
 SELECT
-    d.stock_code,
-    d.trade_date,
-    round(d.open  * a.adj_factor, 3) AS open,
-    round(d.high  * a.adj_factor, 3) AS high,
-    round(d.low   * a.adj_factor, 3) AS low,
-    round(d.close * a.adj_factor, 3) AS close,
-    d.volume,
-    d.amount,
-    d.pct_chg,
-    d.turnover
+    d.stock_code, d.trade_date,
+    round(d.open  * f.factor, 3) AS open,
+    round(d.high  * f.factor, 3) AS high,
+    round(d.low   * f.factor, 3) AS low,
+    round(d.close * f.factor, 3) AS close,
+    d.volume, d.amount, d.pct_chg, d.turnover
 FROM daily_price d
-JOIN adj_factor a USING (stock_code, trade_date);
+LEFT JOIN LATERAL (
+    SELECT a.adj_factor AS factor FROM adj_factor a
+    WHERE a.stock_code = d.stock_code AND a.trade_date <= d.trade_date
+    ORDER BY a.trade_date DESC LIMIT 1
+) f0 ON true
+CROSS JOIN LATERAL (SELECT coalesce(f0.factor, 1) AS factor) f;
 
--- 前复权:后复权价 ÷ 最新后复权因子(除权点会随最新因子平移)
+-- 前复权:后复权价(同上前向填充)÷ 该股票最新一个后复权因子(查不到记为 1)
 CREATE OR REPLACE VIEW daily_price_qfq AS
 WITH latest AS (
     SELECT DISTINCT ON (stock_code)
@@ -144,19 +150,20 @@ WITH latest AS (
     ORDER BY stock_code, trade_date DESC
 )
 SELECT
-    d.stock_code,
-    d.trade_date,
-    round(d.open  * a.adj_factor / l.f, 3) AS open,
-    round(d.high  * a.adj_factor / l.f, 3) AS high,
-    round(d.low   * a.adj_factor / l.f, 3) AS low,
-    round(d.close * a.adj_factor / l.f, 3) AS close,
-    d.volume,
-    d.amount,
-    d.pct_chg,
-    d.turnover
+    d.stock_code, d.trade_date,
+    round(d.open  * f.factor / coalesce(l.f, 1), 3) AS open,
+    round(d.high  * f.factor / coalesce(l.f, 1), 3) AS high,
+    round(d.low   * f.factor / coalesce(l.f, 1), 3) AS low,
+    round(d.close * f.factor / coalesce(l.f, 1), 3) AS close,
+    d.volume, d.amount, d.pct_chg, d.turnover
 FROM daily_price d
-JOIN adj_factor a USING (stock_code, trade_date)
-JOIN latest     l USING (stock_code);
+LEFT JOIN LATERAL (
+    SELECT a.adj_factor AS factor FROM adj_factor a
+    WHERE a.stock_code = d.stock_code AND a.trade_date <= d.trade_date
+    ORDER BY a.trade_date DESC LIMIT 1
+) f0 ON true
+CROSS JOIN LATERAL (SELECT coalesce(f0.factor, 1) AS factor) f
+LEFT JOIN latest l ON l.stock_code = d.stock_code;
 
 -- ===========================================================================
 -- 周线 / 月线物化视图:从后复权日线聚合(单一事实来源)
