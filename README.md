@@ -100,9 +100,18 @@ SELECT * FROM weekly_price_hfq WHERE stock_code = '000001.SZ' ORDER BY period_st
 
 方案 B 分市场独立表(设计:`docs/superpowers/specs/2026-07-09-hk-us-daily-db-design.md`):
 
-- 范围:港股全列表 ~2,700 只;美股市值前 600(主要中概股如 BABA/PDD 已在其中)(快照式,只增不删)。
+- 范围:港股全列表 ~2,700 只;美股 = 标普500 + 纳指100 + 中概精选,约 550 只(清单来自 GitHub 数据集 + Wikipedia + 内置精选)(快照式,只增不删)。
 - **成交量单位为股**(A 股为手);货币按表隐含:`hk_*`=HKD,`us_*`=USD。
-- 交易日历从指数日线派生(恒指 / 标普500);港股日历派生自新浪恒指数据,仅覆盖 2013-08 之后;增量补漏只依赖近期日历,不受影响。复权因子 = 东财 hfq 收盘 ÷ 原始收盘。
+- 交易日历从指数日线派生(恒指 / 标普500);港股日历派生自新浪恒指数据,仅覆盖 2013-08 之后;增量补漏只依赖近期日历,不受影响。复权因子来自新浪(港股 hfq 因子;美股 qfq 因子直乘,重锚定到最早日=1,三市场锚点统一);东财现算路径保留为备用(ASTOCK_INTL_SOURCE=em)。
+
+### 数据源与已知限制
+
+- 港/美日线原始价来自腾讯 K 线(ASTOCK_INTL_SOURCE 开关,默认 tx;em=东财备用);A 股默认东财,ASTOCK_ASHARE_SOURCE=tx 可切腾讯应急(成交额/换手率会缺失)。
+- 港股清单来自 HKEX 官方证券列表(仅 Equity)。
+- **hk_/us_ 表的 amount(成交额)与 turnover(换手率)恒为 NULL**(腾讯源不提供),周/月线的 sum(amount) 也为 NULL。
+- 美股历史深度因股而异(部分 1984 起,多数 2007 起;CBOE.US 无数据——腾讯无 BZX 源)。
+- pct_chg 口径:A 股为东财除权口径;港/美为裸收盘环比(拆股日会出现大幅值,复权分析请用 hfq/qfq 视图价格自行计算)。
+- 港股当日数据通常次日增量运行时补齐(日历派生自新浪指数,发布有延迟)。
 
 ```bash
 psql -d astock -f 04_schema_hk_us.sql
@@ -116,6 +125,7 @@ ASTOCK_DB_USER=zhu .venv/bin/python 05_init_load_intl.py --market us --workers 3
 ```cron
 0 18 * * 1-5  cd /path/to/my_stocks && ASTOCK_DB_USER=zhu ASTOCK_DB_PASSWORD='xxx' .venv/bin/python 06_daily_update_intl.py --market hk >> update_hk.log 2>&1
 0 9  * * 2-6  cd /path/to/my_stocks && ASTOCK_DB_USER=zhu ASTOCK_DB_PASSWORD='xxx' .venv/bin/python 06_daily_update_intl.py --market us >> update_us.log 2>&1
+# 港股当日 K 线一般次日补齐,属正常
 ```
 
 ## 后续(第二期)
