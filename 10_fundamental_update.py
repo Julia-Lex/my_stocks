@@ -43,7 +43,14 @@ import common as c
 # _VALUATION_START/_SHARE_SANITY_MAX/_f/_i 等阶段3小工具,避免复制。
 init_fund = import_module("09_init_fundamental")
 
-TASK = "daily_fund"
+TASK = "daily_fund"              # 仅哨兵 marker 行(_cross_check/_share_check)使用
+# per-stock 进度行按阶段独立命名:三个阶段若共用 (task='daily_fund', stock_code)
+# 同一 key,mark_progress 的 upsert 会让后跑的阶段覆盖先跑阶段的 message/status
+# (实测 share=+N 被下一轮 val=+0 覆盖),无法定位某股在哪个阶段失败。
+# run_stock_todo 的 task 参数决定异常时 error 行的归属,须与阶段内 mark_progress 同名。
+TASK_VAL = "daily_fund_val"      # 1) 估值日增量
+TASK_STMT = "daily_fund_stmt"    # 2) 变化股票报表重拉
+TASK_SHARE = "daily_fund_share"  # 3) 股本核查
 _CROSS_MONTHS = {1, 2, 4, 7, 8, 10}   # 披露季:每月都核查;其余月份靠 7 天间隔兜底
 _CHECK_INTERVAL_DAYS = 7
 
@@ -85,7 +92,7 @@ def update_valuation(conn, workers: int, limit: int | None) -> None:
         max_d = c.get_max_trade_date(conn2, r.stock_code, table="daily_valuation")
         val = c.fetch_valuation(r.symbol)
         if val.empty:
-            c.mark_progress(conn2, TASK, r.stock_code, max_d, "done", "val=+0")
+            c.mark_progress(conn2, TASK_VAL, r.stock_code, max_d, "done", "val=+0")
             return
         if max_d is not None:
             val = val[val["trade_date"] > max_d]
@@ -102,11 +109,11 @@ def update_valuation(conn, workers: int, limit: int | None) -> None:
             ["stock_code", "trade_date"],
         )
         last = val["trade_date"].max() if not val.empty else max_d
-        c.mark_progress(conn2, TASK, r.stock_code, last, "done", f"val=+{n}")
+        c.mark_progress(conn2, TASK_VAL, r.stock_code, last, "done", f"val=+{n}")
         if n:
             c.log.info("  %s: 估值 +%d", r.stock_code, n)
 
-    c.run_stock_todo(todo, TASK, load, workers, max_consecutive_errors=15)
+    c.run_stock_todo(todo, TASK_VAL, load, workers, max_consecutive_errors=15)
 
 
 # ===========================================================================
@@ -176,10 +183,10 @@ def refresh_changed_statements(conn, changed: set[str], workers: int, limit: int
         for st in ("income", "balance", "cashflow"):
             total += c.upsert_jsonb_statement(conn2, r.stock_code, st,
                                               c.fetch_fin_report_sina(r.symbol, st))
-        c.mark_progress(conn2, TASK, r.stock_code, date.today(), "done", f"stmt=+{total}")
+        c.mark_progress(conn2, TASK_STMT, r.stock_code, date.today(), "done", f"stmt=+{total}")
         c.log.info("  %s: 报表 %d 行", r.stock_code, total)
 
-    c.run_stock_todo(todo, TASK, load, workers, max_consecutive_errors=15)
+    c.run_stock_todo(todo, TASK_STMT, load, workers, max_consecutive_errors=15)
 
     codes = sorted(r.stock_code for r in todo)
     if codes:
@@ -207,7 +214,7 @@ def share_check(conn, workers: int, limit: int | None) -> None:
     def load(conn2, r):
         share = c.fetch_share_structure(r.symbol)
         if share.empty:
-            c.mark_progress(conn2, TASK, r.stock_code, None, "done", "share=+0")
+            c.mark_progress(conn2, TASK_SHARE, r.stock_code, None, "done", "share=+0")
             return
         bad = share[share["total_shares"] > init_fund._SHARE_SANITY_MAX]
         if not bad.empty:
@@ -221,9 +228,9 @@ def share_check(conn, workers: int, limit: int | None) -> None:
              for row in share.itertuples(index=False)],
             ["stock_code", "change_date"],
         )
-        c.mark_progress(conn2, TASK, r.stock_code, date.today(), "done", f"share=+{n}")
+        c.mark_progress(conn2, TASK_SHARE, r.stock_code, date.today(), "done", f"share=+{n}")
 
-    c.run_stock_todo(todo, TASK, load, workers, max_consecutive_errors=15)
+    c.run_stock_todo(todo, TASK_SHARE, load, workers, max_consecutive_errors=15)
 
     c.mark_progress(conn, TASK, marker, date.today(), "done", f"stocks={len(todo)}")
     c.log.info("股本核查完成")
