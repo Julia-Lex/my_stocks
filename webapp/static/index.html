@@ -37,6 +37,10 @@
   .card .lbl { font-size:12px; color:var(--muted); }
   .card .val { font-size:19px; font-weight:650; margin-top:4px; }
   .card .val.neg { color:var(--neg); }
+  /* 频率单选 */
+  .freq { display:flex; gap:14px; align-items:center; margin:0 0 12px; font-size:14px; }
+  .freq label { cursor:pointer; display:flex; gap:4px; align-items:center; }
+  .freq .hint { color:var(--muted); font-size:12px; }
   /* 报表 tab + 表格 */
   .tabs { display:flex; gap:6px; margin-bottom:-1px; }
   .tab { padding:8px 18px; border:1px solid var(--border); border-bottom:none;
@@ -70,8 +74,10 @@ const $ = s => document.querySelector(s);
 const MK = { cn:'A股', hk:'港股', us:'美股' };
 const CUR = { CNY:'人民币', HKD:'港元', USD:'美元' };
 let cur = null;          // 当前 statements 响应
+let curStock = null;     // 当前选中的股票 {market, code}
 let tab = 'income';
 let expanded = false;
+let freq = 'annual';     // annual=年度(默认,近5年年报) | quarterly=季度
 
 function err(msg){ const e=$('#err'); e.textContent=msg||''; e.style.display=msg?'block':'none'; }
 
@@ -108,17 +114,19 @@ function renderSug(items){
 document.addEventListener('click', e=>{ if(!e.target.closest('.searchbox')) $('#sug').style.display='none'; });
 
 /* ---------- 加载与渲染 ---------- */
-async function load(it){
+async function load(it, keepView){
   err('');
+  curStock = it;
   $('#content').innerHTML = '<div class="note">加载中…</div>';
   try{
-    const r = await fetch(`/api/statements?market=${it.market}&code=${encodeURIComponent(it.code)}`);
+    const r = await fetch(`/api/statements?market=${it.market}&code=${encodeURIComponent(it.code)}&freq=${freq}`);
     if(r.status===404){
       $('#content').innerHTML = '<div class="note">该股票暂无财报数据(数据库目前仅覆盖部分港/美股财报)</div>';
       return;
     }
     if(!r.ok) throw new Error('查询失败 HTTP '+r.status);
-    cur = await r.json(); tab='income'; expanded=false;
+    cur = await r.json();
+    if(!keepView){ tab='income'; expanded=false; }
     render();
   }catch(ex){ err(ex.message); $('#content').innerHTML=''; }
 }
@@ -143,6 +151,12 @@ function render(){
     <div id="head">${cur.name} <span class="sub">${cur.code} · ${MK[cur.market]}
       · 币种:${unit} · 最新报告期:${cur.latest_period}</span></div>
     <div class="cards">${cards}</div>
+    <div class="freq">
+      <label><input type="radio" name="freq" value="annual"${freq==='annual'?' checked':''}>年度(近5年年报)</label>
+      <label><input type="radio" name="freq" value="quarterly"${freq==='quarterly'?' checked':''}>季度(近5年各报告期)</label>
+      ${freq==='quarterly' && cur.market==='cn'
+        ? '<span class="hint">注:A股季报的利润表/现金流量表为年初至报告期的累计值</span>' : ''}
+    </div>
     <div class="tabs">
       ${[['income','利润表'],['balance','资产负债表'],['cashflow','现金流量表']]
         .map(([k,l])=>`<div class="tab${k===tab?' on':''}" data-t="${k}">${l}</div>`).join('')}
@@ -150,6 +164,9 @@ function render(){
     <div class="panel"><div id="tbl"></div>
       <button id="expand"></button></div>`;
   document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{ tab=t.dataset.t; render(); });
+  document.querySelectorAll('input[name=freq]').forEach(rd=>rd.onchange=()=>{
+    freq = rd.value; load(curStock, true);
+  });
   renderTable();
 }
 

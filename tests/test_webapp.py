@@ -33,15 +33,15 @@ def test_search_limit_10():
     assert len(r.json()) <= 10
 
 
-def test_statements_cn():
+def test_statements_cn_annual_default():
     r = client.get("/api/statements", params={"market": "cn", "code": "300308.SZ"})
     assert r.status_code == 200
     d = r.json()
     assert d["name"] == "中际旭创"
     assert d["currency"] == "CNY"
-    # 近 3 年年报 + 今年各期
-    assert "2025-12-31" in d["periods"] and "2026-03-31" in d["periods"]
-    assert "2022-12-31" not in d["periods"]
+    # 默认年度:最近 5 个年报,不含季报
+    assert d["periods"] == ["2021-12-31", "2022-12-31", "2023-12-31",
+                            "2024-12-31", "2025-12-31"]
     for stmt in ("income", "balance", "cashflow"):
         block = d["statements"][stmt]
         assert block["key_items"], stmt
@@ -49,10 +49,33 @@ def test_statements_cn():
         # key_items 都真实存在于 rows
         row_names = {row["item"] for row in block["rows"]}
         assert set(block["key_items"]) <= row_names
+    # 摘要取最新期(2025 年报):营收 382 亿左右
+    assert d["latest_period"] == "2025-12-31"
+    rev = next(s for s in d["summary"] if s["label"] == "营业收入")
+    assert 3.7e10 < rev["value"] < 3.9e10
+    assert any(s["label"] == "资产负债率" for s in d["summary"])
+
+
+def test_statements_cn_quarterly():
+    r = client.get("/api/statements",
+                   params={"market": "cn", "code": "300308.SZ", "freq": "quarterly"})
+    assert r.status_code == 200
+    d = r.json()
+    # 季度:近 5 个自然年(含今年)的全部报告期
+    assert "2026-03-31" in d["periods"]
+    assert "2025-09-30" in d["periods"]
+    assert "2022-03-31" in d["periods"]
+    assert "2021-12-31" not in d["periods"]
+    assert d["latest_period"] == "2026-03-31"
     # 摘要:2026Q1 营收 195 亿左右
     rev = next(s for s in d["summary"] if s["label"] == "营业收入")
     assert 1.9e10 < rev["value"] < 2.0e10
-    assert any(s["label"] == "资产负债率" for s in d["summary"])
+
+
+def test_statements_bad_freq():
+    r = client.get("/api/statements",
+                   params={"market": "cn", "code": "300308.SZ", "freq": "monthly"})
+    assert r.status_code == 422
 
 
 def test_statements_hk():

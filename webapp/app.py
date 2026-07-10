@@ -115,22 +115,27 @@ def _pick(d: dict, candidates) -> float | None:
 
 
 @app.get("/api/statements")
-def statements(market: Literal["cn", "hk", "us"], code: str = Query(..., max_length=16)):
+def statements(market: Literal["cn", "hk", "us"], code: str = Query(..., max_length=16),
+               freq: Literal["annual", "quarterly"] = "annual"):
     cfg = MARKETS[market]
     year = date.today().year
     cur_cols = ", currency" if cfg["has_currency"] else ""
+    if freq == "annual":
+        # 年度:最近 5 个年报(12-31)
+        cond = ("EXTRACT(MONTH FROM report_date) = 12 AND EXTRACT(DAY FROM report_date) = 31"
+                " AND report_date >= %s")
+        since = date(year - 5, 12, 31)
+    else:
+        # 季度:近 5 个自然年(含今年)的全部报告期
+        cond = "report_date >= %s"
+        since = date(year - 4, 1, 1)
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            # 近 3 个自然年的年报 + 今年所有报告期
             cur.execute(
                 f"SELECT report_date, stmt_type, data{cur_cols} FROM {cfg['stmt']} "
-                f"WHERE stock_code = %s AND ("
-                f"  (EXTRACT(MONTH FROM report_date) = 12 AND EXTRACT(DAY FROM report_date) = 31"
-                f"   AND report_date >= %s AND report_date < %s)"
-                f"  OR report_date >= %s) "
-                f"ORDER BY report_date",
-                (code, date(year - 3, 12, 31), date(year, 1, 1), date(year, 1, 1)),
+                f"WHERE stock_code = %s AND ({cond}) ORDER BY report_date",
+                (code, since),
             )
             rows = cur.fetchall()
             cur.execute(f"SELECT name FROM {cfg['basic']} WHERE stock_code = %s", (code,))
