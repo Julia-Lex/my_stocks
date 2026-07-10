@@ -1869,3 +1869,61 @@ def fetch_board_fund_flow(board_name: str, board_type: str) -> pd.DataFrame:
     for col in keep[1:]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
     return df.dropna(subset=["trade_date"])
+
+
+def upsert_board_daily(conn, board_code: str, df: pd.DataFrame) -> int:
+    df = drop_unclosed_bars(df, f"{board_code}(board)")   # A股 15:30 口径同样适用板块指数
+    if df.empty:
+        return 0
+    cols = ["board_code", "trade_date", "open", "high", "low", "close",
+            "volume", "amount", "pct_chg", "turnover"]
+    rows = [(board_code, r.trade_date,
+             _num(r, "open"), _num(r, "high"), _num(r, "low"), _num(r, "close"),
+             _int(r, "volume"), _num(r, "amount"), _num(r, "pct_chg"), _num(r, "turnover"))
+            for r in df.itertuples(index=False)]
+    return upsert(conn, "board_daily", cols, rows, ["board_code", "trade_date"])
+
+
+def upsert_board_fund_flow(conn, board_code: str, df: pd.DataFrame) -> int:
+    if df.empty:
+        return 0
+    df = df[df["trade_date"] <= safe_cutoff_date()]       # 资金流盘中也有当日快照行,同口径过滤
+    if df.empty:
+        return 0
+    cols = ["board_code"] + _BOARD_FLOW_COLS
+    rows = [(board_code, r.trade_date,
+             _num(r, "main_net"), _num(r, "main_net_pct"),
+             _num(r, "xlarge_net"), _num(r, "xlarge_net_pct"),
+             _num(r, "large_net"), _num(r, "large_net_pct"),
+             _num(r, "mid_net"), _num(r, "mid_net_pct"),
+             _num(r, "small_net"), _num(r, "small_net_pct"))
+            for r in df.itertuples(index=False)]
+    return upsert(conn, "board_fund_flow", cols, rows, ["board_code", "trade_date"])
+
+
+def sync_board_members(conn, board_code: str, current: set[str], today: date) -> tuple[int, int]:
+    """成分区间表 diff:新出现开区间(valid_from=today),消失关区间(valid_to=today)。
+
+    current 为空集时禁止调用(接口故障与"板块清空"无法区分,宁可当天不更新)——
+    调用方负责跳过,这里再 assert 一道防线。
+    重开同日关闭的区间(极端:当天误关又回来)由 ON CONFLICT 恢复 valid_to=NULL。
+    """
+    assert current, f"{board_code}: current 成分为空,调用方应跳过而非同步"
+    with conn.cursor() as cur:
+        cur.execute("SELECT stock_code FROM board_member "
+                    "WHERE board_code = %s AND valid_to IS NULL", (board_code,))
+        open_set = {r[0] for r in cur.fetchall()}
+        to_open = sorted(current - open_set)
+        to_close = sorted(open_set - current)
+        if to_close:
+            cur.execute("UPDATE board_member SET valid_to = %s "
+                        "WHERE board_code = %s AND valid_to IS NULL AND stock_code = ANY(%s)",
+                        (today, board_code, to_close))
+        if to_open:
+            psycopg2.extras.execute_values(
+                cur,
+                "INSERT INTO board_member (board_code, stock_code, valid_from) VALUES %s "
+                "ON CONFLICT (board_code, stock_code, valid_from) DO UPDATE SET valid_to = NULL",
+                [(board_code, s, today) for s in to_open])
+    conn.commit()
+    return len(to_open), len(to_close)
