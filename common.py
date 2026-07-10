@@ -887,9 +887,9 @@ MARKET_CLOSE_TIME = dt_time(15, 30)
 # 曾出现机器时钟快 1 小时,导致盘中快照被当成收盘数据入库。
 _TIME_SOURCES = ["https://www.baidu.com", "https://qt.gtimg.cn"]
 _CST = timezone(timedelta(hours=8))
-# (cutoff, 计算时是否已收盘, time.monotonic())
-_cutoff_cache: Optional[tuple[date, bool, float]] = None
-# 收盘前算出的 cutoff 只缓存这么久:长任务跨过 15:30 后要能自动放行当天
+# (cutoff, time.monotonic())
+_cutoff_cache: Optional[tuple[date, float]] = None
+# cutoff 统一只缓存这么久:长任务跨过 15:30/午夜后要能自动重算
 _CUTOFF_TTL_OPEN = 600.0
 
 
@@ -916,25 +916,39 @@ def beijing_now() -> datetime:
     return datetime.now(_CST)
 
 
+def _cutoff_of(t: datetime) -> date:
+    """按 15:30 口径把一个北京时间点折算成允许写入的最晚 trade_date。"""
+    return t.date() if t.time() >= MARKET_CLOSE_TIME else t.date() - timedelta(days=1)
+
+
 def safe_cutoff_date() -> date:
     """
     允许写入的最晚 trade_date(缓存,避免每只股票都发时间请求)。
     未到当天 15:30 → 只能写到昨天;否则可写到今天。
-    已收盘时算出的结果整个进程有效;未收盘时只缓存 10 分钟,
-    这样跑几个小时的任务跨过 15:30 后,后续股票能正常写入当天。
+
+    取「网络时间算出的 cutoff」与「本机时钟算出的 cutoff」的较早者:任何一路
+    时间读数出错(时间源/代理返回错误 Date 头、本机时钟漂移),只会让 cutoff
+    更保守——当日定盘 bar 最多晚一次运行入库,由断点续传自动补齐;绝不会把
+    盘中快照放进库。2026-07-10 实案:init 长跑在开盘时段(本机时钟正确)静默
+    拿到 cutoff=当天,写入 327 只盘中 bar,事后无法复原是哪路时间出错——单一
+    读数不可信,min() 则两路同时出错才会失守。
+
+    缓存一律只存 10 分钟(收盘后也一样,一次 HEAD 请求的代价可忽略):跨夜/
+    跨天长任务必须能重算,旧的「已收盘结果整进程有效」策略会把一次错误判定
+    放大到整个进程周期。
     """
     global _cutoff_cache
     if _cutoff_cache is not None:
-        cutoff, was_closed, at = _cutoff_cache
-        if was_closed or time.monotonic() - at < _CUTOFF_TTL_OPEN:
+        cutoff, at = _cutoff_cache
+        if time.monotonic() - at < _CUTOFF_TTL_OPEN:
             return cutoff
-    now = beijing_now()
-    closed = now.time() >= MARKET_CLOSE_TIME
-    cutoff = now.date() if closed else now.date() - timedelta(days=1)
-    if not closed:
-        log.info("当前 %s 未过收盘时间,今日 bar 将被跳过(cutoff=%s)",
-                 now.strftime("%H:%M"), cutoff)
-    _cutoff_cache = (cutoff, closed, time.monotonic())
+    net = beijing_now()
+    local = datetime.now(_CST)
+    cutoff = min(_cutoff_of(net), _cutoff_of(local))
+    # 无论盘中还是盘后都留痕:07-10 事故里"已收盘"路径静默,导致无法归因
+    log.info("收盘防护 cutoff=%s(网络 %s / 本机 %s)",
+             cutoff, net.strftime("%m-%d %H:%M"), local.strftime("%m-%d %H:%M"))
+    _cutoff_cache = (cutoff, time.monotonic())
     return cutoff
 
 
