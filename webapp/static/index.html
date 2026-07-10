@@ -54,6 +54,7 @@
   th:first-child, td:first-child { text-align:left; position:sticky; left:0; background:#fff; }
   thead th { color:var(--muted); font-weight:500; border-bottom:1px solid var(--border); }
   td.neg { color:var(--neg); }
+  .pct { color:var(--muted); font-size:11px; margin-left:3px; }
   #expand { margin-top:10px; background:none; border:none; color:var(--accent);
             cursor:pointer; font-size:13.5px; padding:4px 0; }
   .note { color:var(--muted); font-size:13px; padding:30px 0; text-align:center; }
@@ -78,6 +79,8 @@ let curStock = null;     // 当前选中的股票 {market, code}
 let tab = 'income';
 let expanded = false;
 let freq = 'annual';     // annual=年度(默认,近5年年报) | quarterly=季度
+let showYoy = false;     // 同比:对比上一年同期
+let showQoq = false;     // 环比:对比相邻上一期
 
 function err(msg){ const e=$('#err'); e.textContent=msg||''; e.style.display=msg?'block':'none'; }
 
@@ -159,6 +162,8 @@ function render(){
     <div class="freq">
       <label><input type="radio" name="freq" value="annual"${freq==='annual'?' checked':''}>年度(近5年年报)</label>
       <label><input type="radio" name="freq" value="quarterly"${freq==='quarterly'?' checked':''}>季度(近5年各报告期)</label>
+      <label><input type="checkbox" id="yoy"${showYoy?' checked':''}>同比</label>
+      <label><input type="checkbox" id="qoq"${showQoq?' checked':''}>环比</label>
       ${freq==='quarterly' && cur.market==='cn'
         ? '<span class="hint">注:A股季报的利润表/现金流量表为年初至报告期的累计值</span>' : ''}
     </div>
@@ -172,6 +177,8 @@ function render(){
   document.querySelectorAll('input[name=freq]').forEach(rd=>rd.onchange=()=>{
     freq = rd.value; load(curStock, true);
   });
+  $('#yoy').onchange = e=>{ showYoy=e.target.checked; renderTable(); };
+  $('#qoq').onchange = e=>{ showQoq=e.target.checked; renderTable(); };
   renderTable();
 }
 
@@ -180,11 +187,25 @@ function renderTable(){
   const rows = expanded ? block.rows
                         : block.rows.filter(r=>block.key_items.includes(r.item));
   const periods = [...cur.periods].reverse();   // 从左到右 = 从新到旧
+  const asc = cur.periods;                      // 升序,供环比找相邻上一期
+  const pct = (v, prev) => (v==null || prev==null || prev===0) ? null
+    : ((v-prev)/Math.abs(prev)*100).toFixed(1).replace(/^(?!-)/,'+')+'%';
   const head = `<tr><th>科目(单位:亿,每股类除外)</th>` +
     periods.map(p=>`<th>${p}</th>`).join('') + '</tr>';
   const body = rows.map(r=>'<tr><td>'+label(r.item)+'</td>'+periods.map(p=>{
       const v = r.values[p];
-      return `<td${v<0?' class="neg"':''}>${fmt(v, r.item)}</td>`;
+      const parts = [];
+      if(showYoy){
+        const y = pct(v, r.values[p.replace(/^\d{4}/, s=>s-1)]);   // 上一年同期
+        if(y!==null) parts.push((showQoq?'同比':'')+y);
+      }
+      if(showQoq){
+        const i = asc.indexOf(p);
+        const q = i>0 ? pct(v, r.values[asc[i-1]]) : null;         // 相邻上一期
+        if(q!==null) parts.push((showYoy?'环比':'')+q);
+      }
+      const tail = parts.length ? `<span class="pct">(${parts.join(', ')})</span>` : '';
+      return `<td${v<0?' class="neg"':''}>${fmt(v, r.item)}${tail}</td>`;
     }).join('')+'</tr>').join('');
   $('#tbl').innerHTML = rows.length
     ? `<table><thead>${head}</thead><tbody>${body}</tbody></table>`
