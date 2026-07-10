@@ -1780,3 +1780,92 @@ def _fetch_intl_fund_statements_em(stock_code: str, stmt_type: str) -> pd.DataFr
     out = pd.DataFrame(rows)
     out = out[out["report_date"] >= FUND_START].sort_values("report_date").reset_index(drop=True)
     return out
+
+
+# ===========================================================================
+# 板块(行业/概念)。设计: docs/superpowers/specs/2026-07-10-board-rotation-design.md
+# 全部为东财行情族(push2/push2his)接口,与个股日线共享 IP 限流预算。
+# hist/资金流接口按板块名称查询(板块改名需先刷新 board 表);cons 接口支持
+# 直接传 BK 代码(akshare 源码 re.match('^BK\\d+')),不受改名影响。
+# ===========================================================================
+RENAME_BOARD_HIST = {
+    "日期": "trade_date", "开盘": "open", "收盘": "close", "最高": "high", "最低": "low",
+    "成交量": "volume",   # 源单位:手;入库前 ×100 统一为股(全库约定)
+    "成交额": "amount", "涨跌幅": "pct_chg", "换手率": "turnover",
+}
+RENAME_BOARD_FLOW = {
+    "日期": "trade_date",
+    "主力净流入-净额": "main_net", "主力净流入-净占比": "main_net_pct",
+    "超大单净流入-净额": "xlarge_net", "超大单净流入-净占比": "xlarge_net_pct",
+    "大单净流入-净额": "large_net", "大单净流入-净占比": "large_net_pct",
+    "中单净流入-净额": "mid_net", "中单净流入-净占比": "mid_net_pct",
+    "小单净流入-净额": "small_net", "小单净流入-净占比": "small_net_pct",
+}
+_BOARD_FLOW_COLS = ["trade_date", "main_net", "main_net_pct", "xlarge_net", "xlarge_net_pct",
+                    "large_net", "large_net_pct", "mid_net", "mid_net_pct",
+                    "small_net", "small_net_pct"]
+
+
+def fetch_board_list() -> pd.DataFrame:
+    """东财行业+概念板块列表。列: board_code, board_name, board_type。"""
+    import akshare as ak
+
+    frames = []
+    for btype, fn in (("industry", ak.stock_board_industry_name_em),
+                      ("concept", ak.stock_board_concept_name_em)):
+        df = with_retry(fn)
+        df = df.rename(columns={"板块代码": "board_code", "板块名称": "board_name"})
+        df = df[["board_code", "board_name"]].copy()
+        df["board_type"] = btype
+        frames.append(df)
+    return pd.concat(frames, ignore_index=True)
+
+
+def fetch_board_daily(board_name: str, board_type: str, start: str = "19900101") -> pd.DataFrame:
+    """板块指数日线(不复权)。行业与概念的 period 参数拼写不同(akshare 实况)。"""
+    import akshare as ak
+
+    if board_type == "industry":
+        df = with_retry(ak.stock_board_industry_hist_em, symbol=board_name,
+                        start_date=start, end_date="20500101", period="日k", adjust="")
+    else:
+        df = with_retry(ak.stock_board_concept_hist_em, symbol=board_name,
+                        start_date=start, end_date="20500101", period="daily", adjust="")
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.rename(columns=RENAME_BOARD_HIST)
+    keep = [c for c in RENAME_BOARD_HIST.values() if c in df.columns]
+    df = df[keep].copy()
+    df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.date
+    df["volume"] = pd.to_numeric(df["volume"], errors="coerce") * 100  # 手 → 股
+    return df.dropna(subset=["trade_date"])
+
+
+def fetch_board_cons(board_code: str, board_type: str) -> set[str]:
+    """板块当前成分股(全代码集合)。传 BK 代码调用,规避板块改名。"""
+    import akshare as ak
+
+    fn = (ak.stock_board_industry_cons_em if board_type == "industry"
+          else ak.stock_board_concept_cons_em)
+    df = with_retry(fn, symbol=board_code)
+    if df is None or df.empty:
+        return set()
+    return {to_full_code(str(s)) for s in df["代码"].astype(str)}
+
+
+def fetch_board_fund_flow(board_name: str, board_type: str) -> pd.DataFrame:
+    """板块历史资金流(lmt=0 全部可用历史)。净额单位:元;占比单位:%。"""
+    import akshare as ak
+
+    fn = (ak.stock_sector_fund_flow_hist if board_type == "industry"
+          else ak.stock_concept_fund_flow_hist)
+    df = with_retry(fn, symbol=board_name)
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.rename(columns=RENAME_BOARD_FLOW)
+    keep = [c for c in _BOARD_FLOW_COLS if c in df.columns]
+    df = df[keep].copy()
+    df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.date
+    for col in keep[1:]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df.dropna(subset=["trade_date"])
