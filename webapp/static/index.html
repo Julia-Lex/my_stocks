@@ -174,9 +174,10 @@ function renderTable(){
   const block = cur.statements[tab];
   const rows = expanded ? block.rows
                         : block.rows.filter(r=>block.key_items.includes(r.item));
+  const periods = [...cur.periods].reverse();   // 从左到右 = 从新到旧
   const head = `<tr><th>科目(单位:亿,每股类除外)</th>` +
-    cur.periods.map(p=>`<th>${p}</th>`).join('') + '</tr>';
-  const body = rows.map(r=>'<tr><td>'+r.item+'</td>'+cur.periods.map(p=>{
+    periods.map(p=>`<th>${p}</th>`).join('') + '</tr>';
+  const body = rows.map(r=>'<tr><td>'+r.item+'</td>'+periods.map(p=>{
       const v = r.values[p];
       return `<td${v<0?' class="neg"':''}>${fmt(v, r.item)}</td>`;
     }).join('')+'</tr>').join('');

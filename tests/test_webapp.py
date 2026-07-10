@@ -49,6 +49,9 @@ def test_statements_cn_annual_default():
         # key_items 都真实存在于 rows
         row_names = {row["item"] for row in block["rows"]}
         assert set(block["key_items"]) <= row_names
+    # 利润表前三行:营收、净利润、归母净利润
+    assert d["statements"]["income"]["key_items"][:3] == [
+        "营业总收入", "净利润", "归属于母公司所有者的净利润"]
     # 摘要取最新期(2025 年报):营收 382 亿左右
     assert d["latest_period"] == "2025-12-31"
     rev = next(s for s in d["summary"] if s["label"] == "营业收入")
