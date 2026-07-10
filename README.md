@@ -209,6 +209,57 @@ SELECT f.stock_code, b.name, f.report_date, f.ann_date, f.total_assets
 
 (cron 的实际安装由控制者在验收时执行,README 只记录。)
 
+## 板块数据(行业/概念,支持板块轮动)
+
+设计:`docs/superpowers/specs/2026-07-10-board-rotation-design.md`。东财体系,
+行业 ~86 个 + 概念 ~450 个;全部为行情族(push2/push2his)接口,与个股日线共享限流预算。
+
+### 四表速查
+
+| 表 | 内容 | 主键 |
+|---|---|---|
+| `board` | 板块字典(代码/名称/类型/是否在市) | board_code |
+| `board_member` | 成分**区间表**(valid_from/valid_to) | (board_code, stock_code, valid_from) |
+| `board_daily` | 板块指数日线(行业历史约到 2006;volume 单位股) | (board_code, trade_date) |
+| `board_fund_flow` | 板块资金流(主力/超大/大/中/小单净额与占比,元) | (board_code, trade_date) |
+
+### 初始化与增量
+
+```bash
+psql -U zhu -d astock -f 11_schema_board.sql
+ASTOCK_DB_USER=zhu .venv/bin/python 12_init_board.py --workers 3   # 全量,断点续传
+ASTOCK_DB_USER=zhu .venv/bin/python 13_board_update.py             # 每日增量
+```
+
+### 成分区间表用法
+
+```sql
+-- 某日 d 某板块的成分(as-of)
+SELECT stock_code FROM board_member
+WHERE board_code = 'BK0475' AND valid_from <= :d AND (valid_to IS NULL OR valid_to > :d);
+
+-- 某股当前所属全部板块
+SELECT b.board_type, b.board_name FROM board_member m JOIN board b USING (board_code)
+WHERE m.stock_code = '600519.SH' AND m.valid_to IS NULL;
+```
+
+### 已知限制
+
+1. **成分历史 = 观测历史**:东财只提供当前成分快照,`valid_from` 是本库首次观测到
+   纳入的日期(首次建库日的存量成分尤其如此),不是真实纳入日;停跑期间的变动归到
+   下一次观测日。
+2. **概念板块会生灭**:从东财列表消失的板块 `is_active=false`,历史数据保留;
+   回测跨板块生命周期时注意用 `is_active` 或数据实际日期范围过滤。
+3. **资金流历史深度依源**:`lmt=0` 拉全东财可用历史,各板块起点不一。
+4. 板块指数无复权概念,`board_daily` 即原始点位;板块内**无权重数据**(东财不提供),
+   需要加权口径时用成分股流通市值自行近似。
+
+### 每日定时(cron 示例,合并主分支后安装)
+
+```cron
+10 18 * * 1-5  cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 13_board_update.py >> update_board.log 2>&1
+```
+
 ## 后续(第二期)
 
 - 数据量大后可加 TimescaleDB 扩展 / 迁移到独立主机(当前无损可迁)。
