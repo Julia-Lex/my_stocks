@@ -1383,10 +1383,21 @@ def fetch_share_structure(symbol: str) -> pd.DataFrame:
 # 流通市值/总股本/流通股本/PE(TTM)/PE(静)/市净率/PEG值/市现率/市销率。源不含股息率(dv_ratio)
 # 与市销率TTM(ps_ttm),两列按 brief 签名保留但恒为 NaN(下游/Task 4 需知悉此限制)。
 def fetch_valuation(symbol: str) -> pd.DataFrame:
-    """东财估值历史。列: trade_date, pe, pe_ttm, pb, ps, ps_ttm, dv_ratio, total_mv。"""
+    """东财估值历史。列: trade_date, pe, pe_ttm, pb, ps, ps_ttm, dv_ratio, total_mv。
+
+    源对部分股票(实测次新股 301583、北交所 920081)无数据,result 为 null,
+    akshare 内部抛 TypeError——这是"无数据"而非瞬时故障,直接按空返回,
+    不进 with_retry 的指数退避(否则这类股票每次都白等 30s 且永远记 error)。
+    """
     import akshare as ak
 
-    df = with_retry(ak.stock_value_em, symbol=symbol.strip().zfill(6))
+    def _value_em(sym: str) -> pd.DataFrame:
+        try:
+            return ak.stock_value_em(symbol=sym)
+        except TypeError:
+            return pd.DataFrame()
+
+    df = with_retry(_value_em, symbol.strip().zfill(6))
     if df is None or df.empty:
         return pd.DataFrame()
     df = df.rename(columns={
