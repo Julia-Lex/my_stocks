@@ -27,6 +27,9 @@
 | `05_init_load_intl.py` | 港/美全量初始化(`--market hk|us`) |
 | `06_daily_update_intl.py` | 港/美每日增量 + 补漏 |
 | `07_minute_update.py` | A股 1 分钟线回填/增量(通达信源,`--recon` 对账) |
+| `08_schema_fundamental.sql` | 基本面四层表建表 + 视图(报表/指标/股本/估值) |
+| `09_init_fundamental.py` | 基本面全量初始化 + 分阶段回填 |
+| `10_fundamental_update.py` | 基本面增量更新(公告日 ann_date 驱动) |
 | `requirements.txt` | Python 依赖 |
 
 ## 快速开始(在你本机执行)
@@ -144,7 +147,66 @@ ASTOCK_DB_USER=zhu .venv/bin/python 07_minute_update.py --recon 20   # 抽样对
 - 北交所暂不支持(通达信标准行情接口无 BJ);指数分钟线未做。
 - 已知单位陷阱:**腾讯行情对科创板(688/689)成交量返回股、主板/创业板返回手**,`_fetch_daily_tx` 已按板块区分换算——接新数据源时务必先做"分钟/日线对账"验证单位。
 
+## 基本面数据(二期)
+
+### 四层表速查
+
+| 层级 | 表名 | 用途 | 数据量 | 特点 |
+| --- | --- | --- | --- | --- |
+| **报表层** | `fin_statement` | 资产负债表/利润表/现金流量表(资产/负债/权益/收入/利润等 30+ 科目) | 60.1 万行 / 5,530 只 | 季/年报,公告日 `ann_date` 回溯 |
+| **指标层** | `fin_indicator` | 财务比率指标(ROE/ROA/负债率/流动比等 40+ 指标) | 33 万行 | 公告日 100% 覆盖,无调整历史 |
+| **股本层** | `share_capital` | 股本结构(总股本/流通股/A/B/H 股等)时间序列 | 16.1 万行 | 全历史翻页版(每次配股/转增/送股后重新披露) |
+| **估值层** | `daily_valuation` | 日级估值指标(PE/PB/PS/价格/市值等) | 920 万行(2018 起) | 交易日级,源起点所限无 2018 前数据 |
+
+### 初始化(分阶段)
+
+```bash
+# 1) 建表
+psql -d astock -f 08_schema_fundamental.sql
+
+# 2) 回填报表层 + 指标层 + 股本层(可选 --workers 并发,首次 ~1-2 小时)
+ASTOCK_DB_USER=zhu .venv/bin/python 09_init_fundamental.py
+
+# 3) 初始化估值层(需等报表层完成;可选 --phase 1 补 2026Q2 尚未披露完毕的截面)
+ASTOCK_DB_USER=zhu .venv/bin/python 09_init_fundamental.py --phase valuation
+```
+
+### fin_asof / fin_asof_all 用法
+
+财务数据是**报告期维度**,需用 `fin_asof` / `fin_asof_all` 函数将其对齐到任意交易日。`ann_date`(公告日期) ≥ 报告期后才能使用(防止未来函数);用法示例:
+
+```sql
+-- 单只股票:查 2026-05-20 时已公告的最新季报(通常为 2026Q1)
+SELECT stock_code, report_date, ann_date, net_income, roe
+  FROM fin_asof('600519.SH', '2026-05-20'::date)
+ ORDER BY ann_date DESC LIMIT 1;
+
+-- 截面:查 2026-06-30 全市场在市 A 股(二级标签)的最新年报(2025年报)
+SELECT s.stock_code, s.stock_name, f.report_date, f.ann_date, f.total_assets
+  FROM fin_asof_all('2026-06-30'::date) AS f
+  JOIN stock_basic AS s USING (stock_code)
+ WHERE s.etl_date IS NOT NULL AND s.listStatus='上市'
+   AND f.report_date = '2025-12-31'
+ ORDER BY f.total_assets DESC;
+```
+
+### 已知限制
+
+1. **无修订历史**:表中数据对应公告时刻的披露版本,后续如被修正/重述不回溯更新。对标基金年报/企业年报,公告日确定后不再改。
+2. **`ann_date` 防提前看,不防事后修正**:`fin_asof` 按公告日 ≥ 查询日来筛选,防止提前获知;但若披露方后续修正数据,仓库不会回溯更新。
+3. **`ann_date IS NULL` 的行在 as-of 查询里不可见**:某些历史较久的 A 股或停牌期间的数据公告日缺失时,该行被排除;业务决策时应理解这是源数据限制,非库表设计缺陷。
+4. **估值层 `dv_ratio`(股息率)与 `ps_ttm` 恒为 NULL**:东财 `stock_value_em` 接口不提供这两项指标,需从其他因子库或财务引擎另行计算。
+5. **指标/报表表含约 6,100 只退市股与新三板/老三板主体、78 只 B 股**:东财截面接口天然包含全部曾披露主体(这是防幸存者偏差的特性);筛选在市 A 股时 `JOIN stock_basic` 过滤 `listStatus='上市'`,回测时按 `daily_price` 股票域自然过滤。
+6. **2026Q2(报告期 20260630)三张截面尚未披露完毕**:属正常,披露后跑 `09_init_fundamental.py --phase 1` 自动补。
+
+### 每日定时(cron 示例)
+
+```cron
+40 18 * * 1-5  cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu ASTOCK_DB_PASSWORD='xxx' .venv/bin/python 10_fundamental_update.py >> update_fund.log 2>&1
+```
+
+(cron 的实际安装由控制者在验收时执行,README 只记录。)
+
 ## 后续(第二期)
 
-- 股本变动表、财务指标表(**必须含公告日 `ann_date`**,防未来函数)。
 - 数据量大后可加 TimescaleDB 扩展 / 迁移到独立主机(当前无损可迁)。
