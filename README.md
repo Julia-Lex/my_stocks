@@ -209,6 +209,56 @@ SELECT f.stock_code, b.name, f.report_date, f.ann_date, f.total_assets
 
 (cron 的实际安装由控制者在验收时执行,README 只记录。)
 
+## 港股 / 美股基本面(三期)
+
+设计:`docs/superpowers/specs/2026-07-10-hkus-fundamental-design.md`。**富途 OpenAPI 主源**
+(`get_financials_statements`,历史深达港股 2001/美股 1979)+ 东财备源与美股公告日源。
+本期裁定只做两层(报表 + 指标),无股本/估值层(免费源短板,备档待启)。
+
+| 表 | 内容 | 覆盖 |
+| --- | --- | --- |
+| `hk_/us_fin_statement` | 三大报表全科目 JSONB(`{科目名: 金额}`)+ `currency` | 近 10 年,累计/年度口径 |
+| `hk_/us_fin_indicator` | EPS/BPS/ROE/毛利率/负债率等 14 指标宽表 + `ann_date` | 同上 |
+| `hk_/us_fin_asof(股, 日期)` / `*_fin_asof_all(日期)` | 防未来函数取数入口 | 只认非 NULL `ann_date` |
+
+```sql
+-- 美股 as-of:2026-06-20 时点可见的 ADBE 最新报告期(实测返回 2026-05-28 期,公告日 06-15)
+SELECT report_date, ann_date, eps, roe FROM us_fin_asof('ADBE.US', '2026-06-20');
+
+-- 港股指标直查(注意:港股无 as-of,见下方限制 1)
+SELECT report_date, currency, eps, roe, debt_ratio
+FROM hk_fin_indicator WHERE stock_code = '00001.HK' ORDER BY report_date DESC LIMIT 3;
+```
+
+### FutuOpenD 运维(硬依赖)
+
+初始化与增量都要求 **FutuOpenD 网关常驻并已登录**(127.0.0.1:11111)。网关不可达时脚本
+明确报错退出(提示"请启动 FutuOpenD"),不静默降级;重启网关后重跑即断点续传。富途限频
+30 次/30 秒,代码内置全局 1.05 秒节流(`ASTOCK_FUTU_MIN_INTERVAL` 可调)。
+
+```bash
+python 12_init_fundamental_intl.py --market us --workers 2   # 美股全量 ~1.2h
+python 12_init_fundamental_intl.py --market hk --workers 2   # 港股全量 ~6h(过夜)
+python 13_fundamental_update_intl.py --market hk             # 增量(7 天门控,平日秒退)
+```
+
+### 已知限制
+
+1. **港股 `ann_date` 不可得 → 港股 as-of 防未来函数不可用**:东财/富途的免费口径都不提供
+   港股财报披露日(三级探测全部落空,见 spec)。`hk_fin_asof(_all)` 对港股永远返回空;
+   回测请勿直接使用港股基本面因子,或自行按披露惯例(年报 3 月底/中报 8 月底)加保守滞后。
+2. 美股 `ann_date` 有两道数据修正:东财老报告期公告日被"最新披露日"覆盖的行已按
+   `>400 天滞后` 护栏剔除(约 40%,方向保守);财季末日期与东财差 ±1 天,按(年,月)容差
+   匹配(ADBE 等非日历财年已实测)。美股 Q1 单季公告日为已知覆盖缺口(NULL)。
+3. 美股指标中 `bps`/`ocf_ps` 恒 NULL(富途 type4 与东财美股接口均无此科目);其余
+   12 列由富途 + 东财互补填充。
+4. `currency` 如实存不换算:部分港股财报以 CNY 计价(如腾讯),跨币种比较自行处理。
+
+```cron
+50 18 * * 1-5  cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu ASTOCK_DB_PASSWORD='xxx' .venv/bin/python 13_fundamental_update_intl.py --market hk >> update_fund_hk.log 2>&1
+55 18 * * 1-5  cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu ASTOCK_DB_PASSWORD='xxx' .venv/bin/python 13_fundamental_update_intl.py --market us >> update_fund_us.log 2>&1
+```
+
 ## 板块数据(行业/概念,支持板块轮动)
 
 设计:`docs/superpowers/specs/2026-07-10-board-rotation-design.md`。东财体系,
