@@ -1206,3 +1206,164 @@ def run_stock_todo(todo, task: str, load_fn, workers: int,
             except Exception:  # noqa: BLE001
                 pass
         _all_conns.clear()
+
+
+# ===========================================================================
+# 基本面(二期)。设计: docs/superpowers/specs/2026-07-10-ashare-fundamental-design.md
+# 截面接口(东财,含公告日)供指标骨干;新浪按股供全科目 JSONB。
+# ===========================================================================
+from datetime import date as _date
+
+FUND_START = _date(2015, 12, 31)
+
+# stock_yjbb_em 实探列(2026-07-10):序号/股票代码/股票简称/每股收益/营业总收入-营业总收入/
+# 营业总收入-同比增长/营业总收入-季度环比增长/净利润-净利润/净利润-同比增长/净利润-季度环比增长/
+# 每股净资产/净资产收益率/每股经营现金流量/销售毛利率/所处行业/最新公告日期
+RENAME_YJBB = {
+    "股票代码": "symbol", "每股收益": "eps", "营业总收入-营业总收入": "revenue",
+    "营业总收入-同比增长": "revenue_yoy", "净利润-净利润": "net_profit",
+    "净利润-同比增长": "net_profit_yoy", "每股净资产": "bps",
+    "净资产收益率": "roe", "每股经营现金流量": "ocf_ps", "销售毛利率": "gross_margin",
+    "所处行业": "industry", "最新公告日期": "ann_date",
+}
+# stock_lrb_em 实探列(2026-07-10,20250331,5221 行):序号/股票代码/股票简称/净利润/净利润同比/
+# 营业总收入/营业总收入同比/营业总支出-营业支出/营业总支出-销售费用/营业总支出-管理费用/
+# 营业总支出-财务费用/营业总支出-营业总支出/营业利润/利润总额/公告日期
+RENAME_LRB = {
+    "股票代码": "symbol", "净利润": "net_profit", "净利润同比": "net_profit_yoy",
+    "营业总收入": "revenue", "营业总收入同比": "revenue_yoy",
+    "营业利润": "operating_profit", "利润总额": "total_profit",
+    "公告日期": "ann_date",
+}
+# stock_zcfz_em 实探列(2026-07-10,20250331,5166 行):序号/股票代码/股票简称/资产-货币资金/
+# 资产-应收账款/资产-存货/资产-总资产/资产-总资产同比/负债-应付账款/负债-预收账款/
+# 负债-总负债/负债-总负债同比/资产负债率/股东权益合计/公告日期
+RENAME_ZCFZ = {
+    "股票代码": "symbol", "资产-货币资金": "cash", "资产-应收账款": "accounts_recv",
+    "资产-存货": "inventory", "资产-总资产": "total_assets",
+    "负债-应付账款": "accounts_pay", "负债-总负债": "total_liab",
+    "资产负债率": "debt_ratio", "股东权益合计": "total_equity",
+    "公告日期": "ann_date",
+}
+# stock_xjll_em 实探列(2026-07-10,20250331,5221 行):序号/股票代码/股票简称/净现金流-净现金流/
+# 净现金流-同比增长/经营性现金流-现金流量净额/经营性现金流-净现金流占比/投资性现金流-现金流量净额/
+# 投资性现金流-净现金流占比/融资性现金流-现金流量净额/融资性现金流-净现金流占比/公告日期
+RENAME_XJLL = {
+    "股票代码": "symbol", "净现金流-净现金流": "net_cash_flow",
+    "经营性现金流-现金流量净额": "ocf", "投资性现金流-现金流量净额": "icf",
+    "融资性现金流-现金流量净额": "fcf", "公告日期": "ann_date",
+}
+
+_CROSS_FN = {"yjbb": "stock_yjbb_em", "lrb": "stock_lrb_em",
+             "zcfz": "stock_zcfz_em", "xjll": "stock_xjll_em"}
+_CROSS_RENAME = {"yjbb": RENAME_YJBB, "lrb": RENAME_LRB,
+                 "zcfz": RENAME_ZCFZ, "xjll": RENAME_XJLL}
+
+
+def quarter_ends(start: _date, end: _date) -> list[date]:
+    """start~end 间全部季末日(3/31, 6/30, 9/30, 12/31),含端点。"""
+    out, y = [], start.year
+    while y <= end.year:
+        for m, d in ((3, 31), (6, 30), (9, 30), (12, 31)):
+            q = _date(y, m, d)
+            if start <= q <= end:
+                out.append(q)
+        y += 1
+    return out
+
+
+def fetch_fin_cross(kind: str, period: str) -> pd.DataFrame:
+    """东财按报告期截面。period 'YYYYMMDD'(季末日)。返回含 stock_code/ann_date 的重命名帧。"""
+    import akshare as ak
+
+    fn = getattr(ak, _CROSS_FN[kind])
+    df = with_retry(fn, date=period)
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.rename(columns=_CROSS_RENAME[kind])
+    keep = [c for c in set(_CROSS_RENAME[kind].values()) if c in df.columns]
+    df = df[keep].copy()
+    df["symbol"] = df["symbol"].astype(str).str.zfill(6)
+    df["stock_code"] = df["symbol"].map(to_full_code)
+    if "ann_date" in df.columns:
+        df["ann_date"] = pd.to_datetime(df["ann_date"], errors="coerce").dt.date
+    return df
+
+
+_SINA_STMT = {"balance": "资产负债表", "income": "利润表", "cashflow": "现金流量表"}
+
+
+def fetch_fin_report_sina(symbol: str, stmt_type: str) -> pd.DataFrame:
+    """新浪全科目报表(单请求全历史)。返回 report_date + 原始中文科目列。"""
+    import akshare as ak
+
+    df = with_retry(ak.stock_financial_report_sina,
+                    stock=to_sina_code(symbol), symbol=_SINA_STMT[stmt_type])
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.rename(columns={"报告日": "report_date"})
+    df["report_date"] = pd.to_datetime(df["report_date"], errors="coerce").dt.date
+    return df.dropna(subset=["report_date"])
+
+
+def upsert_jsonb_statement(conn, stock_code: str, stmt_type: str, df: pd.DataFrame) -> int:
+    """新浪报表帧 → fin_statement JSONB(过滤 report_date >= FUND_START;NaN 键剔除)。"""
+    import json
+
+    if df.empty:
+        return 0
+    df = df[df["report_date"] >= FUND_START]
+    rows = []
+    for _, r in df.iterrows():
+        payload = {k: (None if pd.isna(v) else (float(v) if isinstance(v, (int, float)) else str(v)))
+                   for k, v in r.items() if k != "report_date" and not pd.isna(v)}
+        rows.append((stock_code, r["report_date"], stmt_type, json.dumps(payload, ensure_ascii=False)))
+    return upsert(conn, "fin_statement",
+                  ["stock_code", "report_date", "stmt_type", "data"],
+                  rows, ["stock_code", "report_date", "stmt_type"], update_cols=["data"])
+
+
+# stock_zh_a_gbjg_em 实探(2026-07-10,symbol 需 'SH600519' 形式即 to_full_code 输出):
+# 列 = 变更日期/总股本/流通受限股份/其他内资持股(受限)/境内法人持股(受限)/境内自然人持股(受限)/
+# 已流通股份/已上市流通A股/变动原因。600519.SH 实测总股本=1,250,081,601(股口径,非万股,与实际
+# 已知总股本量级吻合),故不做 ×10000 换算。
+def fetch_share_structure(symbol: str) -> pd.DataFrame:
+    """东财股本结构变动。列: change_date, total_shares, float_shares, reason。单位:股。"""
+    import akshare as ak
+
+    full = to_full_code(symbol)  # 'SH600519'/'SZ000001' 等价写法;实测需 '600519.SH' 形式
+    df = with_retry(ak.stock_zh_a_gbjg_em, symbol=full)
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.rename(columns={
+        "变更日期": "change_date", "总股本": "total_shares",
+        "已上市流通A股": "float_shares", "变动原因": "reason",
+    })
+    keep = [c for c in ("change_date", "total_shares", "float_shares", "reason") if c in df.columns]
+    df = df[keep].copy()
+    df["change_date"] = pd.to_datetime(df["change_date"], errors="coerce").dt.date
+    return df.dropna(subset=["change_date"])
+
+
+# stock_value_em 实探(2026-07-10,symbol='600519' 六位裸代码):按股全历史时间序列
+# (2018-01-02 起至今 2065 行),非按日截面 —— 与 fetch_valuation 按股循环调用的设计一致,
+# Task 3 阶段 3 的"按股循环"假设不需要改动。列 = 数据日期/当日收盘价/当日涨跌幅/总市值/
+# 流通市值/总股本/流通股本/PE(TTM)/PE(静)/市净率/PEG值/市现率/市销率。源不含股息率(dv_ratio)
+# 与市销率TTM(ps_ttm),两列按 brief 签名保留但恒为 NaN(下游/Task 4 需知悉此限制)。
+def fetch_valuation(symbol: str) -> pd.DataFrame:
+    """东财估值历史。列: trade_date, pe, pe_ttm, pb, ps, ps_ttm, dv_ratio, total_mv。"""
+    import akshare as ak
+
+    df = with_retry(ak.stock_value_em, symbol=symbol.strip().zfill(6))
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.rename(columns={
+        "数据日期": "trade_date", "PE(静)": "pe", "PE(TTM)": "pe_ttm",
+        "市净率": "pb", "市销率": "ps", "总市值": "total_mv",
+    })
+    df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.date
+    for col in ("ps_ttm", "dv_ratio"):  # 源不提供,补空列以满足下游固定列集
+        if col not in df.columns:
+            df[col] = pd.NA
+    keep = ["trade_date", "pe", "pe_ttm", "pb", "ps", "ps_ttm", "dv_ratio", "total_mv"]
+    return df[keep].dropna(subset=["trade_date"])
