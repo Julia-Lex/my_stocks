@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
 
 # 根目录的 common.py(uvicorn 从仓库根启动时 cwd 在 sys.path,这里再保险一层)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -177,3 +178,11 @@ def statements(market: Literal["cn", "hk", "us"], code: str = Query(..., max_len
     return {"code": code, "name": name_row[0] if name_row else code, "market": market,
             "currency": currency, "latest_period": latest, "periods": periods,
             "summary": summary, "statements": statements_out}
+
+
+_STATIC = Path(__file__).resolve().parent / "static"
+
+
+@app.get("/", include_in_schema=False)
+def index():
+    return FileResponse(_STATIC / "index.html")
