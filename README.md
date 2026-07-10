@@ -13,7 +13,7 @@
 | 退市股保留 | `stock_basic` 含 `delist_date`,防幸存者偏差(注意免费源退市股覆盖不全)。 |
 | 断点续传 | `etl_progress` 记录每只完成情况,中断重跑自动跳过。 |
 
-> 成交量单位为**股**——三市场统一(2026-07-09 起;东财/腾讯 A 股源返回"手",入库层 ×100 换算)。分钟线无法从日线反推,需另行获取——本项目暂只做日线。
+> 成交量单位为**股**——三市场统一(2026-07-09 起;东财/腾讯 A 股源返回"手",入库层 ×100 换算)。分钟线存于 `minute_price`(1 分钟粒度,按月分区,通达信源,ETL 待建)。
 
 ## 目录
 
@@ -26,6 +26,7 @@
 | `04_schema_hk_us.sql` | 港股/美股建表(方案 B 分表,前缀 hk_/us_) |
 | `05_init_load_intl.py` | 港/美全量初始化(`--market hk|us`) |
 | `06_daily_update_intl.py` | 港/美每日增量 + 补漏 |
+| `07_minute_update.py` | A股 1 分钟线回填/增量(通达信源,`--recon` 对账) |
 | `requirements.txt` | Python 依赖 |
 
 ## 快速开始(在你本机执行)
@@ -128,8 +129,22 @@ ASTOCK_DB_USER=zhu .venv/bin/python 05_init_load_intl.py --market us --workers 3
 # 港股当日 K 线一般次日补齐,属正常
 ```
 
+## 分钟线(A股)
+
+数据源为通达信行情服务器(pytdx):免费、可回溯约 90-140 个交易日的 1 分钟线,
+成交量原生为股。节点 IP 会漂移,脚本启动时自动探测可用节点、断线换节点重连。
+
+```bash
+ASTOCK_DB_USER=zhu .venv/bin/python 07_minute_update.py --limit 5    # 试跑
+ASTOCK_DB_USER=zhu .venv/bin/python 07_minute_update.py --workers 3  # 全市场(首次 ~1-2h)
+ASTOCK_DB_USER=zhu .venv/bin/python 07_minute_update.py --recon 20   # 抽样对账
+```
+
+- 增量幂等:按库内 max(trade_time) 续拉,可随时中断重跑;建议 cron 收盘后每日一跑(1 分钟历史只保留约 3 个月,断档不可补)。
+- 北交所暂不支持(通达信标准行情接口无 BJ);指数分钟线未做。
+- 已知单位陷阱:**腾讯行情对科创板(688/689)成交量返回股、主板/创业板返回手**,`_fetch_daily_tx` 已按板块区分换算——接新数据源时务必先做"分钟/日线对账"验证单位。
+
 ## 后续(第二期)
 
 - 股本变动表、财务指标表(**必须含公告日 `ann_date`**,防未来函数)。
-- 分钟线:从现在起每日增量归档;历史分钟数据为付费稀缺资源,确需再购。
 - 数据量大后可加 TimescaleDB 扩展 / 迁移到独立主机(当前无损可迁)。

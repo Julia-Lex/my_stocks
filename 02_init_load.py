@@ -63,7 +63,9 @@ def load_one_stock(conn, stock_code: str, symbol: str) -> None:
     adj = c.fetch_hfq_factor(symbol)
     n_adj = c.upsert_adj_factor(conn, stock_code, adj)
 
-    last = daily["trade_date"].max() if not daily.empty else None
+    # 进度里的 last_date 必须是「真正写入」的日期:盘中运行时当天的
+    # bar 会被 drop_unclosed_bars 拦掉,不能记成已完成
+    last = min(daily["trade_date"].max(), c.safe_cutoff_date()) if not daily.empty else None
     c.mark_progress(conn, TASK, stock_code, last, status="done",
                     message=f"src={c.ASHARE_SOURCE},daily={n_daily},adj={n_adj}")
     c.log.info("  %s: 日线 %d / 因子 %d", stock_code, n_daily, n_adj)

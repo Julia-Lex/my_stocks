@@ -28,13 +28,17 @@ TASK = "daily_update"
 
 
 def expected_open_dates(conn, since: date) -> list[date]:
-    """交易日历中 since 之后(含)的开市日。"""
+    """交易日历中 since 之后(含)、且已定盘可写入的开市日。
+
+    上界用 safe_cutoff_date() 而非本机 date.today():盘中运行时
+    今天尚未定盘,不应算作缺口,否则会白拉一遍全市场再被防护丢弃。
+    """
     with conn.cursor() as cur:
         cur.execute(
             "SELECT trade_date FROM trade_calendar "
             "WHERE is_open AND trade_date >= %s AND trade_date <= %s "
             "ORDER BY trade_date",
-            (since, date.today()),
+            (since, c.safe_cutoff_date()),
         )
         return [r[0] for r in cur.fetchall()]
 

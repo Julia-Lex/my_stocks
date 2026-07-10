@@ -103,6 +103,48 @@ CREATE TABLE IF NOT EXISTS index_daily (
 );
 
 -- ---------------------------------------------------------------------------
+-- 分钟线行情(不复权原始价)· 按「月」RANGE 分区
+--   * 只存 1 分钟这一个最细粒度;5/15/30/60 分钟按需从它聚合(单一事实来源)。
+--   * trade_time 为该 bar 的「结束时刻」(东财口径:09:31 表示 09:30-09:31)。
+--   * 数据量约为日线的 240 倍(全市场 ~130 万行/交易日),故按月分区;
+--     新月份分区由 ensure_minute_partitions() 创建,ETL 写入前调用即可。
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS minute_price (
+    stock_code VARCHAR(12)   NOT NULL,
+    trade_time TIMESTAMP     NOT NULL,   -- bar 结束时刻,北京时间
+    open       NUMERIC(12,3),
+    high       NUMERIC(12,3),
+    low        NUMERIC(12,3),
+    close      NUMERIC(12,3),
+    volume     BIGINT,          -- 成交量,单位:股(通达信分钟源原生即股)
+    amount     NUMERIC(20,3),   -- 成交额,单位:元
+    PRIMARY KEY (stock_code, trade_time)
+) PARTITION BY RANGE (trade_time);
+
+-- 反向索引:支持「某一时刻全市场」的截面查询
+CREATE INDEX IF NOT EXISTS idx_minute_price_time
+    ON minute_price (trade_time, stock_code);
+
+-- 建分区辅助函数:从 start_month 起连续建 n 个月度分区(已存在则跳过)
+CREATE OR REPLACE FUNCTION ensure_minute_partitions(start_month DATE, n INT)
+RETURNS void AS $$
+DECLARE
+    m DATE;
+BEGIN
+    FOR i IN 0..(n - 1) LOOP
+        m := date_trunc('month', start_month) + make_interval(months => i);
+        EXECUTE format(
+            'CREATE TABLE IF NOT EXISTS minute_price_%s '
+            'PARTITION OF minute_price FOR VALUES FROM (%L) TO (%L)',
+            to_char(m, 'YYYYMM'), m, m + interval '1 month'
+        );
+    END LOOP;
+END $$ LANGUAGE plpgsql;
+
+-- 初始分区:自当前月份起 18 个月(相对时间,重跑脚本永不过期)
+SELECT ensure_minute_partitions(date_trunc('month', CURRENT_DATE)::date, 18);
+
+-- ---------------------------------------------------------------------------
 -- ETL 进度表(断点续传)
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS etl_progress (

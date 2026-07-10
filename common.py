@@ -18,7 +18,9 @@ import logging
 import os
 import threading
 import time
-from datetime import date, datetime, timedelta
+import urllib.request
+from datetime import date, datetime, time as dt_time, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Iterable, Optional, Sequence
 
 import pandas as pd
@@ -241,7 +243,11 @@ def fetch_calendar() -> pd.DataFrame:
 
 
 def fetch_index(index_code: str) -> pd.DataFrame:
-    """指数日线。index_code 形如 'sh000001'。"""
+    """指数日线。index_code 形如 'sh000001'。
+
+    单位说明:新浪指数源的 volume 原生就是「股」(2026-07-09 用
+    sh000001 与全市场成交量对账验证),无需像东财日线那样 ×100。
+    """
     import akshare as ak
 
     df = with_retry(ak.stock_zh_index_daily, symbol=index_code)
@@ -638,9 +644,13 @@ def _fetch_daily_tx(symbol: str, start: str = "19900101", end: Optional[str] = N
         return pd.DataFrame()
     df = df.sort_values("trade_date").reset_index(drop=True)
     df["pct_chg"] = df["close"].pct_change() * 100
-    # 腾讯 A 股 K 线成交量单位是手(实测 000001 与东财原始值一致);
-    # 全库统一存股,×100 换算。注意:港/美(_fetch_intl_daily_tx)原生就是股,不换算。
-    df["volume"] = df["volume"] * 100
+    # 腾讯 A 股 K 线成交量单位按板块不同:主板/创业板是「手」(实测 000001、
+    # 002830 与东财原始值一致),但科创板(688/689)原生就是「股」(2026-07-09
+    # 实测 688469:腾讯值与通达信分钟加总一致,是主板口径的 100 倍)。
+    # 全库统一存股:非科创板 ×100,科创板不换算。港/美(_fetch_intl_daily_tx)
+    # 原生股,不换算;北交所腾讯无 K 线数据(daily=0),暂不涉及。
+    if not symbol.lstrip().startswith(("688", "689")):
+        df["volume"] = df["volume"] * 100
     df["amount"] = pd.NA
     df["turnover"] = pd.NA
 
@@ -866,6 +876,82 @@ def rebuild_intl_calendar(conn, market: str) -> None:
 
 
 # ===========================================================================
+# 收盘防护:盘中跑 ETL 时,拒绝把当天未定盘的 A 股 bar 写进库
+# ===========================================================================
+# 仅适用于 A 股(北京时间 15:30 口径):15:00 收盘竞价结束后,创业板/科创板
+# 还有盘后定价交易(15:05-15:30),其成交量计入当日总量,过 15:30 才算定盘。
+# 港/美股时区不同,不适用本防护,由各自更新器的运行时点保证(见 06 脚本 cron)。
+MARKET_CLOSE_TIME = dt_time(15, 30)
+
+# 网络时间来源(取 HTTP 响应头的 Date 字段,GMT)。本机时钟不可信:
+# 曾出现机器时钟快 1 小时,导致盘中快照被当成收盘数据入库。
+_TIME_SOURCES = ["https://www.baidu.com", "https://qt.gtimg.cn"]
+_CST = timezone(timedelta(hours=8))
+# (cutoff, 计算时是否已收盘, time.monotonic())
+_cutoff_cache: Optional[tuple[date, bool, float]] = None
+# 收盘前算出的 cutoff 只缓存这么久:长任务跨过 15:30 后要能自动放行当天
+_CUTOFF_TTL_OPEN = 600.0
+
+
+def beijing_now() -> datetime:
+    """当前北京时间。优先取网络时间;全部失败才退回本机时钟(带告警)。"""
+    for url in _TIME_SOURCES:
+        try:
+            req = urllib.request.Request(url, method="HEAD")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                header = resp.headers.get("Date")
+            if not header:
+                continue
+            net = parsedate_to_datetime(header)
+            if net.tzinfo is None:          # 个别代理返回 '-0000',解析出 naive 时间,按 GMT 处理
+                net = net.replace(tzinfo=timezone.utc)
+            net = net.astimezone(_CST)
+            drift = abs((datetime.now(_CST) - net).total_seconds())
+            if drift > 120:
+                log.warning("本机时钟与网络时间相差 %.0f 秒,以网络时间为准", drift)
+            return net
+        except Exception as exc:  # noqa: BLE001
+            log.warning("获取网络时间失败(%s): %s", url, exc)
+    log.warning("所有网络时间源不可用,退回本机时钟 —— 若本机时间不准,当日数据可能有误")
+    return datetime.now(_CST)
+
+
+def safe_cutoff_date() -> date:
+    """
+    允许写入的最晚 trade_date(缓存,避免每只股票都发时间请求)。
+    未到当天 15:30 → 只能写到昨天;否则可写到今天。
+    已收盘时算出的结果整个进程有效;未收盘时只缓存 10 分钟,
+    这样跑几个小时的任务跨过 15:30 后,后续股票能正常写入当天。
+    """
+    global _cutoff_cache
+    if _cutoff_cache is not None:
+        cutoff, was_closed, at = _cutoff_cache
+        if was_closed or time.monotonic() - at < _CUTOFF_TTL_OPEN:
+            return cutoff
+    now = beijing_now()
+    closed = now.time() >= MARKET_CLOSE_TIME
+    cutoff = now.date() if closed else now.date() - timedelta(days=1)
+    if not closed:
+        log.info("当前 %s 未过收盘时间,今日 bar 将被跳过(cutoff=%s)",
+                 now.strftime("%H:%M"), cutoff)
+    _cutoff_cache = (cutoff, closed, time.monotonic())
+    return cutoff
+
+
+def drop_unclosed_bars(df: pd.DataFrame, label: str) -> pd.DataFrame:
+    """丢弃 trade_date 晚于 cutoff 的行(盘中快照/异常未来日期)。"""
+    if df.empty or "trade_date" not in df.columns:
+        return df
+    cutoff = safe_cutoff_date()
+    mask = df["trade_date"] <= cutoff
+    dropped = int((~mask).sum())
+    if not dropped:
+        return df          # 常见情形(盘后运行)直接返回,省一次整表拷贝
+    log.info("%s: 跳过 %d 行未定盘数据(> %s)", label, dropped, cutoff)
+    return df[mask]
+
+
+# ===========================================================================
 # 入库(upsert)
 # ===========================================================================
 def upsert(conn, table: str, cols: Sequence[str], rows: Iterable[Sequence],
@@ -899,6 +985,8 @@ def upsert(conn, table: str, cols: Sequence[str], rows: Iterable[Sequence],
 
 
 def upsert_daily(conn, stock_code: str, df: pd.DataFrame, table: str = "daily_price") -> int:
+    if table == "daily_price":          # 收盘防护仅限 A 股表(北京 15:30 口径)
+        df = drop_unclosed_bars(df, stock_code)
     if df.empty:
         return 0
     cols = ["stock_code", "trade_date", "open", "high", "low", "close",
@@ -913,6 +1001,9 @@ def upsert_daily(conn, stock_code: str, df: pd.DataFrame, table: str = "daily_pr
 
 
 def upsert_adj_factor(conn, stock_code: str, df: pd.DataFrame, table: str = "adj_factor") -> int:
+    # 盘中跑到除权日时,fetch_hfq_factor 的现算路径会用未定盘价算出当日因子,同样要拦
+    if table == "adj_factor":           # 仅 A 股
+        df = drop_unclosed_bars(df, f"{stock_code}(adj)")
     if df.empty:
         return 0
     cols = ["stock_code", "trade_date", "adj_factor"]
@@ -920,7 +1011,34 @@ def upsert_adj_factor(conn, stock_code: str, df: pd.DataFrame, table: str = "adj
     return upsert(conn, table, cols, rows, ["stock_code", "trade_date"])
 
 
+def upsert_minute(conn, stock_code: str, df: pd.DataFrame) -> int:
+    """1 分钟线入库。trade_time 为 bar 结束时刻;volume 单位股(通达信原生即股)。
+
+    不挂 drop_unclosed_bars(那是日线的 15:30 口径):分钟 bar 只要该分钟
+    已走完即为定盘,由调用方按 beijing_now() 过滤未走完的最后一根。
+    """
+    if df.empty:
+        return 0
+    cols = ["stock_code", "trade_time", "open", "high", "low", "close", "volume", "amount"]
+    rows = [
+        (stock_code, r.trade_time,
+         _num(r, "open"), _num(r, "high"), _num(r, "low"), _num(r, "close"),
+         _int(r, "volume"), _num(r, "amount"))
+        for r in df.itertuples(index=False)
+    ]
+    return upsert(conn, "minute_price", cols, rows, ["stock_code", "trade_time"])
+
+
+def ensure_minute_partitions(conn, start: date, months: int) -> None:
+    """确保 [start 所在月, +months) 的月度分区存在(调 schema 里的同名 SQL 函数)。"""
+    with conn.cursor() as cur:
+        cur.execute("SELECT ensure_minute_partitions(%s, %s)", (start, months))
+    conn.commit()
+
+
 def upsert_index(conn, index_code: str, df: pd.DataFrame, table: str = "index_daily") -> int:
+    if table == "index_daily":          # 仅 A 股
+        df = drop_unclosed_bars(df, index_code)
     if df.empty:
         return 0
     cols = ["index_code", "trade_date", "open", "high", "low", "close", "volume", "amount"]
