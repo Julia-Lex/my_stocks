@@ -76,15 +76,18 @@ fin_asof(p_stock VARCHAR, p_date DATE) RETURNS SETOF fin_indicator
 -- 另提供截面版视图/函数:fin_asof_all(p_date) —— 全市场某日可见最新指标
 ```
 
-## 数据源(A 股)
+## 数据源(A 股)· 2026-07-10 实探修订
 
-| 数据 | 接口 | 说明 |
-| --- | --- | --- |
-| 三大报表 | 东财 `stock_balance_sheet_by_report_em` / `stock_profit_sheet_by_report_em` / `stock_cash_flow_sheet_by_report_em`(symbol 形如 `SH600519`) | 全科目,自带 REPORT_DATE 与 NOTICE_DATE(公告日)。实施前先探测列名,漂移只改映射 |
-| 股本变动 | 巨潮 / 东财股本结构接口 | 实施时探测选优,取历史变动序列 |
-| 日频估值 | 乐咕 `stock_a_indicator_lg(symbol)` | PE/PB/PS/股息率/总市值,回溯 >10 年,每股 1 请求 |
+> 原定东财 by-report 全科目接口实测为**每股每表分页 21 次请求**(5,500 股 × 3 表 ≈ 35 万请求,爆预算),弃用。改为"截面 + 新浪全科目"组合,总预算降至 ~2.5 万请求:
 
-指标层无外部源(由 fin_statement 派生)。
+| 数据 | 接口 | 请求量 | 说明 |
+| --- | --- | --- | --- |
+| 指标骨干 + **公告日** | 东财按报告期截面:`stock_yjbb_em(date)`(EPS/营收及同比/净利及同比/BPS/ROE/每股现金流/毛利率/**最新公告日期**)+ `stock_lrb_em` / `stock_zcfz_em` / `stock_xjll_em`(三表主要科目,含**公告日期**) | 40 期 × 4 接口 × ~12 页 ≈ 2,000(东财) | 一次调用拿全市场一个报告期,ann_date 的唯一权威来源 |
+| 三大报表全科目 | 新浪 `stock_financial_report_sina(stock="sh600519", symbol="资产负债表"/"利润表"/"现金流量表")` | 3 × 5,500 ≈ 16,500(新浪) | 每股每表 1 请求返回全部历史期 × ~150 列;**无公告日**,ann_date 由截面层回填 |
+| 股本变动 | 东财 `stock_zh_a_gbjg_em(symbol)` | ~5,500(东财) | 历史股本结构变动 |
+| 日频估值 | 东财 `stock_value_em`(实施时探测签名;若为每股全历史则 ~5,500 请求) | ~5,500(东财) | PE/PB/PS/总市值等 |
+
+指标层构成 = 截面接口直取(自带 ann_date)+ 由 fin_statement JSONB 派生补充(资产负债率、流动比率、现金含量等比率类)。
 
 ## ETL
 
