@@ -99,3 +99,48 @@ def test_statements_no_data():
 def test_statements_bad_market():
     r = client.get("/api/statements", params={"market": "xx", "code": "300308.SZ"})
     assert r.status_code == 422
+
+
+def test_fundamental_cn():
+    r = client.get("/api/fundamental", params={"market": "cn", "code": "300308.SZ"})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["name"] == "中际旭创"
+    assert d["industry"] == "通信设备"
+    v = d["valuation"]
+    assert v and v["pe_ttm"] > 0 and v["pb"] > 0 and v["total_mv"] > 1e11
+    i = d["indicator"]
+    assert i and i["roe"] is not None and i["report_date"] >= "2026-03-31"
+
+
+def test_fundamental_hk():
+    r = client.get("/api/fundamental", params={"market": "hk", "code": "00001.HK"})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["valuation"] is None          # 估值表仅 A股
+    assert d["indicator"] and d["indicator"]["eps"] is not None
+
+
+def test_fundamental_not_found():
+    r = client.get("/api/fundamental", params={"market": "cn", "code": "999999.SZ"})
+    assert r.status_code == 404
+
+
+def test_kline_cn():
+    r = client.get("/api/kline", params={"market": "cn", "code": "300308.SZ", "days": 250})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["adjusted"] is True           # 有复权因子
+    bars = d["bars"]
+    assert len(bars) == 250
+    assert bars == sorted(bars, key=lambda b: b["d"])   # 升序
+    for b in (bars[0], bars[-1]):
+        assert b["l"] <= b["o"] <= b["h"] and b["l"] <= b["c"] <= b["h"]
+        assert b["v"] > 0
+    # 最新一根不晚于今天,且在 2026 年
+    assert bars[-1]["d"].startswith("2026")
+
+
+def test_kline_not_found():
+    r = client.get("/api/kline", params={"market": "cn", "code": "999999.SZ"})
+    assert r.status_code == 404

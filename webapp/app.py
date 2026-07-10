@@ -185,6 +185,100 @@ def statements(market: Literal["cn", "hk", "us"], code: str = Query(..., max_len
             "summary": summary, "statements": statements_out}
 
 
+# ---------------------------------------------------------------------------
+# 基本面 + K线
+# ---------------------------------------------------------------------------
+# 各市场行情/指标表。fin_indicator 三市场列基本一致(cn 多 industry,hk/us 多 currency)
+_QUOTE_TABLES = {
+    "cn": {"price": "daily_price", "adj": "adj_factor", "ind": "fin_indicator"},
+    "hk": {"price": "hk_daily_price", "adj": "hk_adj_factor", "ind": "hk_fin_indicator"},
+    "us": {"price": "us_daily_price", "adj": "us_adj_factor", "ind": "us_fin_indicator"},
+}
+
+_IND_COLS = ["report_date", "eps", "bps", "roe", "roa", "gross_margin", "net_margin",
+             "revenue", "revenue_yoy", "net_profit", "net_profit_yoy",
+             "debt_ratio", "current_ratio"]
+_VAL_COLS = ["trade_date", "pe", "pe_ttm", "pb", "ps_ttm", "dv_ratio", "total_mv"]
+
+
+def _row_dict(cols, row):
+    if row is None:
+        return None
+    out = {}
+    for c, v in zip(cols, row):
+        out[c] = v.isoformat() if hasattr(v, "isoformat") else (float(v) if v is not None else None)
+    return out
+
+
+@app.get("/api/fundamental")
+def fundamental(market: Literal["cn", "hk", "us"], code: str = Query(..., max_length=16)):
+    """最新估值(仅 A股)+ 最新财务指标。"""
+    cfg, qt = MARKETS[market], _QUOTE_TABLES[market]
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT name FROM {cfg['basic']} WHERE stock_code = %s", (code,))
+            name_row = cur.fetchone()
+            if name_row is None:
+                raise HTTPException(status_code=404, detail="未找到该股票")
+            industry = None
+            valuation = None
+            if market == "cn":
+                cur.execute(
+                    f"SELECT {', '.join(_VAL_COLS)} FROM daily_valuation "
+                    f"WHERE stock_code = %s ORDER BY trade_date DESC LIMIT 1", (code,))
+                valuation = _row_dict(_VAL_COLS, cur.fetchone())
+                cur.execute("SELECT industry FROM fin_indicator WHERE stock_code = %s "
+                            "AND industry IS NOT NULL ORDER BY report_date DESC LIMIT 1", (code,))
+                ind_row = cur.fetchone()
+                industry = ind_row[0] if ind_row else None
+            cur.execute(
+                f"SELECT {', '.join(_IND_COLS)} FROM {qt['ind']} "
+                f"WHERE stock_code = %s ORDER BY report_date DESC LIMIT 1", (code,))
+            indicator = _row_dict(_IND_COLS, cur.fetchone())
+    finally:
+        conn.close()
+    return {"code": code, "name": name_row[0], "market": market,
+            "industry": industry, "valuation": valuation, "indicator": indicator}
+
+
+@app.get("/api/kline")
+def kline(market: Literal["cn", "hk", "us"], code: str = Query(..., max_length=16),
+          days: int = Query(250, ge=20, le=1000)):
+    """最近 days 个交易日的日线(前复权,若无复权因子则原始价)。"""
+    qt = _QUOTE_TABLES[market]
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT trade_date, open, high, low, close, volume FROM {qt['price']} "
+                f"WHERE stock_code = %s ORDER BY trade_date DESC LIMIT %s", (code, days))
+            price_rows = cur.fetchall()[::-1]   # 转升序
+            if not price_rows:
+                raise HTTPException(status_code=404, detail="未找到该股票的日线数据")
+            cur.execute(
+                f"SELECT trade_date, adj_factor FROM {qt['adj']} "
+                f"WHERE stock_code = %s ORDER BY trade_date", (code,))
+            factors = cur.fetchall()
+    finally:
+        conn.close()
+
+    # 复权因子只在变动日有记录:按日期前向填充;qfq = 价格 × 当日因子 ÷ 最新因子
+    adjusted = bool(factors)
+    bars = []
+    fi = -1  # factors 中 ≤ 当前交易日的最后下标
+    latest_f = float(factors[-1][1]) if factors else 1.0
+    for d, o, h, l, c, v in price_rows:
+        while fi + 1 < len(factors) and factors[fi + 1][0] <= d:
+            fi += 1
+        f = (float(factors[fi][1]) / latest_f) if (adjusted and fi >= 0) else 1.0
+        bars.append({"d": d.isoformat(),
+                     "o": round(float(o) * f, 3), "h": round(float(h) * f, 3),
+                     "l": round(float(l) * f, 3), "c": round(float(c) * f, 3),
+                     "v": int(v) if v is not None else 0})
+    return {"code": code, "market": market, "adjusted": adjusted, "bars": bars}
+
+
 _STATIC = Path(__file__).resolve().parent / "static"
 
 
