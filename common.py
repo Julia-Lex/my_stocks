@@ -1541,6 +1541,18 @@ _FUTU_CUMULATIVE_TYPES = {1, 2, 3, 7}
 _FUTU_PERIOD_KIND = {1: "Q1", 2: "H1", 3: "9M", 7: "FY"}
 
 
+def _futu_currency(r: dict) -> str | None:
+    """富途 currency_code 取值 guard:空串/None → None(原逻辑);float NaN 也需挡下 ——
+    `or None` 对 NaN 不生效(float NaN 是 truthy),NaN 会被 psycopg2 适配成 SQL 字面量
+    'NaN' 写进 VARCHAR(8) currency 列,产生看起来像字符串"NaN"的脏数据(2026-07-11 最终
+    审查在 us_fin_indicator/us_fin_statement 实测发现,已清洗存量,此处补根因 guard)。
+    """
+    v = r.get("currency_code")
+    if isinstance(v, float) and pd.isna(v):
+        return None
+    return v or None
+
+
 def _futu_reports_to_df(report_list: list[dict]) -> pd.DataFrame:
     """report_list -> DataFrame[report_date, currency, period_kind, data(dict)]。
 
@@ -1562,7 +1574,7 @@ def _futu_reports_to_df(report_list: list[dict]) -> pd.DataFrame:
                 if it.get("data") is not None and it.get("display_name")}
         rows.append({
             "report_date": rd,
-            "currency": r.get("currency_code") or None,
+            "currency": _futu_currency(r),
             "period_kind": _FUTU_PERIOD_KIND.get(r.get("financial_type")),
             "data": data,
         })
@@ -1656,7 +1668,7 @@ def fetch_intl_fund_indicator(stock_code: str) -> pd.DataFrame:
         if rd < FUND_START:
             continue
         items = {it["display_name"]: it for it in r.get("item_list", []) if it.get("data") is not None}
-        row = {"report_date": rd, "currency": r.get("currency_code") or None}
+        row = {"report_date": rd, "currency": _futu_currency(r)}
         for col in _FUND_INDICATOR_COLS:
             row[col] = None
         for name, col in mapping.items():
