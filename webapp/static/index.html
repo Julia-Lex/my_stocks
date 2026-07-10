@@ -131,6 +131,11 @@ async function load(it, keepView){
   }catch(ex){ err(ex.message); $('#content').innerHTML=''; }
 }
 
+// 过长科目的显示别名(仅显示,数据键不变)
+const ALIAS = { '归属于母公司所有者的净利润':'归母净利润',
+                '归属母公司净利润':'归母净利润',
+                '归属于母公司股东净利润':'归母净利润' };
+const label = k => ALIAS[k] || k;
 const isPerShare = k => k.includes('每股') || k.includes('股息') || k.includes('派息');
 function fmt(v, item){
   if(v===null || v===undefined) return '—';
@@ -177,7 +182,7 @@ function renderTable(){
   const periods = [...cur.periods].reverse();   // 从左到右 = 从新到旧
   const head = `<tr><th>科目(单位:亿,每股类除外)</th>` +
     periods.map(p=>`<th>${p}</th>`).join('') + '</tr>';
-  const body = rows.map(r=>'<tr><td>'+r.item+'</td>'+periods.map(p=>{
+  const body = rows.map(r=>'<tr><td>'+label(r.item)+'</td>'+periods.map(p=>{
       const v = r.values[p];
       return `<td${v<0?' class="neg"':''}>${fmt(v, r.item)}</td>`;
     }).join('')+'</tr>').join('');
