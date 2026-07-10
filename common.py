@@ -1323,26 +1323,58 @@ def upsert_jsonb_statement(conn, stock_code: str, stmt_type: str, df: pd.DataFra
                   rows, ["stock_code", "report_date", "stmt_type"], update_cols=["data"])
 
 
-# stock_zh_a_gbjg_em 实探(2026-07-10,symbol 需 'SH600519' 形式即 to_full_code 输出):
-# 列 = 变更日期/总股本/流通受限股份/其他内资持股(受限)/境内法人持股(受限)/境内自然人持股(受限)/
-# 已流通股份/已上市流通A股/变动原因。600519.SH 实测总股本=1,250,081,601(股口径,非万股,与实际
+# 股本结构直连东财 datacenter API(RPT_F10_EH_EQUITY,即 ak.stock_zh_a_gbjg_em 的底层源)。
+# 不走 akshare 是因为其硬编码 pageNumber=1&pageSize=20,按 END_DATE 降序只给最近 20 条,
+# 变动频繁的股票(如 000004.SZ 共 39 条)2016 年前后的历史被截断。这里 pageSize=500 并按
+# result.pages 翻页拉全历史。600519.SH 实测总股本=1,250,081,601(股口径,非万股,与实际
 # 已知总股本量级吻合),故不做 ×10000 换算。
-def fetch_share_structure(symbol: str) -> pd.DataFrame:
-    """东财股本结构变动。列: change_date, total_shares, float_shares, reason。单位:股。"""
-    import akshare as ak
+_EM_GBJG_URL = "https://datacenter.eastmoney.com/securities/api/data/v1/get"
 
-    full = to_full_code(symbol)  # 'SH600519'/'SZ000001' 等价写法;实测需 '600519.SH' 形式
-    df = with_retry(ak.stock_zh_a_gbjg_em, symbol=full)
-    if df is None or df.empty:
+
+def fetch_share_structure(symbol: str) -> pd.DataFrame:
+    """东财股本结构变动(全历史)。列: change_date, total_shares, float_shares, reason。单位:股。"""
+    full = to_full_code(symbol)  # 需 '600519.SH' 形式
+
+    def _page(page_no: int) -> dict:
+        resp = requests.get(_EM_GBJG_URL, params={
+            "reportName": "RPT_F10_EH_EQUITY",
+            "columns": "SECUCODE,END_DATE,TOTAL_SHARES,LISTED_A_SHARES,CHANGE_REASON",
+            "filter": f'(SECUCODE="{full}")',
+            "pageNumber": str(page_no),
+            "pageSize": "500",
+            "sortTypes": "-1",
+            "sortColumns": "END_DATE",
+            "source": "HSF10",
+            "client": "PC",
+        }, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+        resp.raise_for_status()
+        return resp.json()
+
+    records: list[dict] = []
+    page_no, total_pages = 1, 1
+    while page_no <= total_pages:
+        data_json = with_retry(_page, page_no)
+        result = (data_json or {}).get("result") or {}
+        data = result.get("data") or []
+        if not data:
+            break
+        records.extend(data)
+        total_pages = int(result.get("pages") or 1)
+        page_no += 1
+    if not records:
         return pd.DataFrame()
-    df = df.rename(columns={
-        "变更日期": "change_date", "总股本": "total_shares",
-        "已上市流通A股": "float_shares", "变动原因": "reason",
+
+    df = pd.DataFrame(records).rename(columns={
+        "END_DATE": "change_date", "TOTAL_SHARES": "total_shares",
+        "LISTED_A_SHARES": "float_shares", "CHANGE_REASON": "reason",
     })
-    keep = [c for c in ("change_date", "total_shares", "float_shares", "reason") if c in df.columns]
-    df = df[keep].copy()
     df["change_date"] = pd.to_datetime(df["change_date"], errors="coerce").dt.date
-    return df.dropna(subset=["change_date"])
+    for col in ("total_shares", "float_shares"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.dropna(subset=["change_date"])
+    # 同日多条时保留最新一条(源按 END_DATE 降序),防 upsert 单批内主键冲突
+    df = df.drop_duplicates(subset=["change_date"], keep="first")
+    return df[["change_date", "total_shares", "float_shares", "reason"]]
 
 
 # stock_value_em 实探(2026-07-10,symbol='600519' 六位裸代码):按股全历史时间序列
