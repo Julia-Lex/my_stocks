@@ -1494,8 +1494,12 @@ def close_futu() -> None:
 
 
 def futu_code(stock_code: str) -> str:
-    """'00700.HK' -> 'HK.00700';'AAPL.US' -> 'US.AAPL'。纯函数,无网络调用。"""
-    symbol, _, suffix = stock_code.strip().partition(".")
+    """'00700.HK' -> 'HK.00700';'AAPL.US' -> 'US.AAPL'。纯函数,无网络调用。
+
+    用 rpartition 从右切后缀:美股点号股(BRK.B.US)的 symbol 本身含点,
+    左切会拆成 'B.US.BRK' 垃圾码(2026-07-11 全量实跑发现,富途报 format of code)。
+    """
+    symbol, _, suffix = stock_code.strip().rpartition(".")
     return f"{suffix.upper()}.{symbol}"
 
 

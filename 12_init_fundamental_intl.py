@@ -172,6 +172,9 @@ _EM_US_IND_MAP = {
 
 
 def _fetch_us_ann_and_indicators(symbol: str) -> tuple[pd.DataFrame, int]:
+    # 东财美股符号用下划线表示点号股类别(BRK.B → BRK_B,2026-07-11 实测:
+    # BRK.B/BRK-B/BRKB 均无数据,BRK_B 返回 22 行),入口处归一化。
+    symbol = symbol.replace(".", "_")
     """直接调东财美股指标接口(绕过 common.fetch_intl_ann_dates 的窄列裁剪:那个函数
     只返回 report_date/ann_date 两列),取 ann_date 之外顺手带出可映射的指标值。
 
