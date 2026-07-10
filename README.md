@@ -198,7 +198,7 @@ SELECT f.stock_code, b.name, f.report_date, f.ann_date, f.total_assets
 2. **`ann_date` 防提前看,不防事后修正**:`fin_asof` 按公告日 ≥ 查询日来筛选,防止提前获知;但若披露方后续修正数据,仓库不会回溯更新。
 3. **`ann_date IS NULL` 的行在 as-of 查询里不可见**:某些历史较久的 A 股或停牌期间的数据公告日缺失时,该行被排除;业务决策时应理解这是源数据限制,非库表设计缺陷。
 4. **估值层 `dv_ratio`(股息率)与 `ps_ttm` 恒为 NULL**:东财 `stock_value_em` 接口不提供这两项指标,需从其他因子库或财务引擎另行计算。
-5. **指标/报表表含约 6,100 只退市股与新三板/老三板主体、78 只 B 股**:东财截面接口天然包含全部曾披露主体(这是防幸存者偏差的特性);筛选在市 A 股时 `JOIN stock_basic b USING (stock_code) WHERE b.is_active`(或 `delist_date IS NULL`),回测时按 `daily_price` 股票域自然过滤。
+5. **指标表(`fin_indicator`)含约 6,100 只退市/新三板主体与 78 只 B 股;报表表(`fin_statement`)仅覆盖在市 5,530 只**:东财截面接口天然包含全部曾披露主体(这是防幸存者偏差的特性),而 `fin_statement` 逐股拉自新浪三大报表、只覆盖阶段2处理过的在市 A 股清单,两表股票域不完全一致。筛选在市 A 股时 `JOIN stock_basic b USING (stock_code) WHERE b.is_active`(或 `delist_date IS NULL`),回测时按 `daily_price` 股票域自然过滤。
 6. **2026Q2(报告期 20260630)三张截面尚未披露完毕**:属正常,披露后跑 `09_init_fundamental.py --phase 1` 自动补。
 
 ### 每日定时(cron 示例)

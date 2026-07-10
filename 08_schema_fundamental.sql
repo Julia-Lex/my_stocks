@@ -5,6 +5,16 @@
 -- 用法: psql -d astock -f 08_schema_fundamental.sql
 -- =============================================================================
 
+-- 幂等加宽:etl_progress.stock_code 原在 01_schema.sql 里定义为 VARCHAR(12)
+-- (够装 '000001.SZ' 这类股票代码),但本二期的核查节奏借用同一列存哨兵 key
+-- 'YYYYMMDD:kind'(如 '20260630:yjbb',共 13 字符),超出 VARCHAR(12)。若新装
+-- 环境只跑 01_schema.sql + 08_schema_fundamental.sql(不经过后续手工修复),
+-- 阶段1 截面核查写 etl_progress 会报 "value too long for type character
+-- varying(12)"。这里加宽到 16(留出余量),放在 08 开头以便新旧环境重放
+-- 本文件都能补齐;ALTER COLUMN TYPE 到相同或更宽的 VARCHAR 是幂等操作,列已是
+-- VARCHAR(16)(或更宽)时重放不报错、不改变数据。
+ALTER TABLE etl_progress ALTER COLUMN stock_code TYPE VARCHAR(16);
+
 -- 原始报表(全科目,新浪源):JSONB 免疫科目名漂移,键为源中文科目名
 CREATE TABLE IF NOT EXISTS fin_statement (
     stock_code  VARCHAR(12) NOT NULL,

@@ -6,8 +6,11 @@
 2) 财报核查(自适应):当月 ∈ {1,2,4,7,8,10} (披露季)或 --force-cross 或距上次
    核查 ≥7 天(etl_progress task='daily_fund' stock_code='_cross_check' 的
    last_date 记录)时:对「最近 2 个报告期」重拉 4 个截面接口 → upsert
-   fin_indicator;随后对「本次 ann_date 有变化的股票」重拉新浪三大报表 →
-   fin_statement,并对这些股票重算阶段4派生列 + ann_date 回填。
+   fin_indicator;截面重拉完成后,无论 ann_date 是否变化,对这 2 期涉及的
+   全部股票补跑一次阶段4派生重算(防"静默重述"——基础值改了但 ann_date
+   没变,派生列却没跟着更新);随后对「本次 ann_date 有变化的股票」重拉
+   新浪三大报表 → fin_statement,并对这些股票再重算一次阶段4派生列
+   (这次是为了刷新依赖 fin_statement 的 current_ratio)+ ann_date 回填。
 3) 股本:每周核查一次(同 _cross_check 机制,stock_code='_share_check'),
    变化则整段重取覆盖。
 cron(README 同步):40 18 * * 1-5(在分钟线 18:30 之后)
@@ -29,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 from datetime import date
 from importlib import import_module
 
@@ -88,9 +92,19 @@ def update_valuation(conn, workers: int, limit: int | None) -> None:
     todo = list(stocks.itertuples(index=False))
     c.log.info("估值增量:%d 只(并发 %d)", len(todo), workers)
 
+    # 空返回占比统计(跨线程,run_stock_todo 用线程池并发调用 load):估值源若整体
+    # 改版/断更,大量股票会同时返回空,而单只空返回本身是正常情形(见 fetch_valuation
+    # docstring),不能逐只报警;按本轮汇总占比判断更可靠。
+    stats_lock = threading.Lock()
+    stats = {"total": 0, "empty": 0}
+
     def load(conn2, r):
         max_d = c.get_max_trade_date(conn2, r.stock_code, table="daily_valuation")
         val = c.fetch_valuation(r.symbol)
+        with stats_lock:
+            stats["total"] += 1
+            if val.empty:
+                stats["empty"] += 1
         if val.empty:
             c.mark_progress(conn2, TASK_VAL, r.stock_code, max_d, "done", "val=+0")
             return
@@ -115,6 +129,15 @@ def update_valuation(conn, workers: int, limit: int | None) -> None:
 
     c.run_stock_todo(todo, TASK_VAL, load, workers, max_consecutive_errors=15)
 
+    if stats["total"]:
+        empty_ratio = stats["empty"] / stats["total"]
+        if empty_ratio > 0.5:
+            c.log.critical(
+                "估值源疑似改版/断更:本轮 %d/%d(%.1f%%)只股票估值接口返回空,"
+                "超过 50%% 阈值,请人工核查 fetch_valuation/stock_value_em",
+                stats["empty"], stats["total"], empty_ratio * 100,
+            )
+
 
 # ===========================================================================
 # 2) 财报核查(自适应节奏):最近 2 个报告期 × 4 个截面接口 → fin_indicator
@@ -137,6 +160,7 @@ def cross_check(conn, force: bool) -> set[str]:
                len(periods), [p.isoformat() for p in periods], force, seasonal)
 
     changed: set[str] = set()
+    period_codes: set[str] = set()  # 这 2 期涉及的全部股票(无论 ann_date 是否变化)
     for p in periods:
         ps = p.strftime("%Y%m%d")
         with conn.cursor() as cur:
@@ -155,6 +179,7 @@ def cross_check(conn, force: bool) -> set[str]:
         with conn.cursor() as cur:
             cur.execute("SELECT stock_code, ann_date FROM fin_indicator WHERE report_date = %s", (p,))
             after = dict(cur.fetchall())
+        period_codes.update(after.keys())
         for code, ann in after.items():
             if before.get(code) != ann:
                 changed.add(code)
@@ -162,6 +187,22 @@ def cross_check(conn, force: bool) -> set[str]:
     c.mark_progress(conn, TASK, marker, date.today(), "done",
                     f"periods={[p.isoformat() for p in periods]},changed={len(changed)}")
     c.log.info("财报核查完成:%d 只股票 ann_date 有变化", len(changed))
+
+    # 防财务重述后基础值与派生列不一致:截面重拉(_upsert_indicator_from_cross)
+    # 对本次抓到的每一行都会覆盖 fin_indicator 的基础数值列(revenue/net_profit/
+    # total_assets/... ),但这与 ann_date 是否变化无关——源头若做了"静默重述"
+    # (数据修正但未同步推迟/更新公告日),基础值已更新、net_margin/roa/debt_ratio/
+    # ocf_to_profit 等派生列却还停留在旧值,读数不一致。故这里对最近 2 个报告期
+    # fin_indicator 涉及的全部股票(不局限于 ann_date 有变化的 `changed` 子集)
+    # 补跑一次范围化派生重算。与下面 refresh_changed_statements 末尾"仅 ann_date
+    # 变化股票"的派生调用是互补关系而非重复:那一个调用在新浪三大报表重拉*之后*
+    # 执行,专为刷新 current_ratio(依赖 fin_statement JSONB)而存在,这里的调用
+    # 只依赖已经重拉完成的 fin_indicator 截面列,两者范围不同、都保留。
+    if period_codes:
+        c.log.info("防重述范围化派生:最近 %d 期涉及的 %d 只股票(不限于 ann_date 变化)",
+                   len(periods), len(period_codes))
+        init_fund.phase4_derive(conn, stock_codes=sorted(period_codes))
+
     return changed
 
 

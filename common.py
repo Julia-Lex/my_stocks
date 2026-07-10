@@ -1362,7 +1362,19 @@ def fetch_share_structure(symbol: str) -> pd.DataFrame:
             "client": "PC",
         }, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
         resp.raise_for_status()
-        return resp.json()
+        js = resp.json()
+        # 东财响应信封:success=False 代表请求本身失败(限流/参数错误/临时故障等,
+        # 实测报表配置类错误 message="报表配置不存在,..."、code!=0),不是"翻页翻完了"
+        # ——翻页结束的正常信号是 success=True 但 result.data 为空列表(见下方调用处的
+        # `if not data: break`)。两者混为一谈会把请求失败静默当成"该股无股本数据",
+        # 丢数据不报错。这里 raise 交给 with_retry 的指数退避重试,重试耗尽后按现有
+        # 异常传播规则处理(run_stock_todo 记 error、断点续传补跑)。
+        if js.get("success") is not True:
+            raise RuntimeError(
+                f"东财股本接口返回失败 (SECUCODE={full}, page={page_no}): "
+                f"code={js.get('code')}, message={js.get('message')}"
+            )
+        return js
 
     records: list[dict] = []
     page_no, total_pages = 1, 1
@@ -1408,7 +1420,8 @@ def fetch_valuation(symbol: str) -> pd.DataFrame:
     def _value_em(sym: str) -> pd.DataFrame:
         try:
             return ak.stock_value_em(symbol=sym)
-        except TypeError:
+        except TypeError as exc:
+            log.warning("估值接口 %s 返回异常(疑似无数据,按空处理): %s", sym, exc)
             return pd.DataFrame()
 
     df = with_retry(_value_em, symbol.strip().zfill(6))
