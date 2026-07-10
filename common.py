@@ -1644,8 +1644,13 @@ _FUTU_MAININDEX_MAP_US = {
 _FUTU_YOY_PROXY_US: dict[str, str] = {}  # US type4 无可代理科目,revenue_yoy/net_profit_yoy 恒 NULL
 
 
-def fetch_intl_fund_indicator(stock_code: str) -> pd.DataFrame:
-    """富途 type4 关键指标。列 = 指标宽表数值列(_FUND_INDICATOR_COLS)+ report_date, currency。
+def _futu_indicator_reports_to_df(stock_code: str, reports: list[dict]) -> pd.DataFrame:
+    """report_list(type4,关键指标)-> DataFrame[report_date, currency, 指标宽表列...]。
+
+    从 fetch_intl_fund_indicator 抽出的模块级转换(2026-07-11 最终审查 M3):独立成函数
+    后,13_fundamental_update_intl.py 的每周增量核查可以直接喂"首页 reports"(已按
+    num=_RECENT_NUM 拉过,不必再分页翻全量),复用同一份 report→指标行转换逻辑,省下
+    每股每周 1 次多余的全量分页请求。
 
     节标题行(item 无 data 字段)跳过;revenue_yoy/net_profit_yoy 无直接科目时取代理科目
     的 yoy 字段(见上方说明;美股无代理,恒 NULL)。累计口径过滤规则与 fetch_intl_fund_statements
@@ -1655,8 +1660,6 @@ def fetch_intl_fund_indicator(stock_code: str) -> pd.DataFrame:
     mapping = _FUTU_MAININDEX_MAP_HK if market == "hk" else _FUTU_MAININDEX_MAP_US
     yoy_proxy = _FUTU_YOY_PROXY_HK if market == "hk" else _FUTU_YOY_PROXY_US
 
-    code = futu_code(stock_code)
-    reports = _futu_fetch_reports(code, _FUTU_INDICATOR_TYPE)
     rows = []
     for r in reports:
         if r.get("financial_type") not in _FUTU_CUMULATIVE_TYPES:
@@ -1684,75 +1687,21 @@ def fetch_intl_fund_indicator(stock_code: str) -> pd.DataFrame:
     return df.sort_values("report_date").reset_index(drop=True)
 
 
-# ---------------------------------------------------------------------------
-# Step 1d 港股 ann_date 三级探测结论(2026-07-10,见 task-2-report 完整记录):
-# ① stock_financial_hk_analysis_indicator_em("00700","报告期") 全部 36 列打印确认 ——
-#    无 NOTICE_DATE 或任何公告日语义字段(逐列检查过,只有 REPORT_DATE/START_DATE/
-#    FISCAL_YEAR 等报告期字段,没有披露日期)。
-# ② stock_financial_hk_report_em(indicator="报告期") 的资产负债表(唯一带 STD_REPORT_DATE
-#    的报表)实测 20 期:STD_REPORT_DATE 与 REPORT_DATE 逐行恒等(0 处不同),故无"滞后差"
-#    可用来代理公告日。
-# ③ akshare 港股相关函数扫描(hk*financial*/hk*notice*/hk*gg*)未发现独立的港股公告日
-#    接口(stock_hk_financial_indicator_em 同样只有报告期,无公告日)。
-# **结论:港股 ann_date 三级全部落空,不可得** —— 按"宁缺勿假"原则,fetch_intl_ann_dates
-# 对 hk 市场返回 report_date 非空 + ann_date 恒 NULL 的帧,不抛异常;Task 3/README 需据此
-# 声明"港股基本面 as-of 防未来函数不可用"。
-#
-# 美股 ann_date:stock_financial_us_analysis_indicator_em 的 NOTICE_DATE 字段直取,已实测
-# 非 NULL(AAPL "年报" 6 期全部有 NOTICE_DATE)。"年报"(DATE_TYPE_CODE=001)与"累计季报"
-# (002/004,对应 H1/9M)取并集(brief 定义的两枚举);注意 akshare 合法枚举是"累计季报"
-# 而非"累计"(误传枚举会直接 raise ValueError,已实测确认)。"单季报"(003/006/007/008,
-# 含 Q1)未纳入并集 —— 这是 brief 定义范围内的已知覆盖缺口:Q1 单季报告期在 ann_date
-# 回填时会落空(NULL),不影响 H1/9M/FY 三档覆盖。
-#
-# 已知的日期口径差异(供 Task 3 参考):em 的 REPORT_DATE(本函数用作 report_date)是
-# 实际财报截止日,与富途 date_time_str 同源但存在**系统性 1 天误差**(实测 AAPL 近 4 个
-# 年报期:futu 2025-09-26 vs em 2025-09-27、2024-09-27 vs 09-28、2023-09-29 vs 09-30、
-# 2022-09-23 vs 09-24,均相差恰好 1 天,疑似 UTC/美东时区换算差异);calendar 端的
-# STD_REPORT_DATE(如 2025-12-31)则与 futu 日期相差可达 ~90 天(非日历年结公司如 AAPL),
-# 不适合做 join 键,因此本函数刻意选 REPORT_DATE 而非 STD_REPORT_DATE。Task 3 按
-# report_date 做精确 UPDATE 前需评估:是否需要 ±1~2 天容差 join,否则 US ann_date 回填
-# 命中率会因这 1 天系统偏差而显著偏低。
-# ---------------------------------------------------------------------------
-def fetch_intl_ann_dates(market: str, symbol: str) -> pd.DataFrame:
-    """列: report_date, ann_date。us=东财美股指标接口 NOTICE_DATE("年报"+"累计季报"并集,
-    以 REPORT_DATE 为 report_date,理由见上方 docstring);hk=三级探测落空,report_date
-    取指标接口报告期、ann_date 恒 NULL(不抛异常)。
+def fetch_intl_fund_indicator(stock_code: str) -> pd.DataFrame:
+    """富途 type4 关键指标(全量分页)。列 = 指标宽表数值列(_FUND_INDICATOR_COLS)+
+    report_date, currency。report→行转换见 _futu_indicator_reports_to_df。
     """
-    import akshare as ak
-
-    if market == "us":
-        frames = []
-        for ind in ("年报", "累计季报"):
-            df = with_retry(ak.stock_financial_us_analysis_indicator_em, symbol=symbol, indicator=ind)
-            if df is not None and not df.empty and {"REPORT_DATE", "NOTICE_DATE"} <= set(df.columns):
-                frames.append(df[["REPORT_DATE", "NOTICE_DATE"]])
-        if not frames:
-            return pd.DataFrame(columns=["report_date", "ann_date"])
-        df = pd.concat(frames, ignore_index=True)
-        df = df.rename(columns={"REPORT_DATE": "report_date", "NOTICE_DATE": "ann_date"})
-        df["report_date"] = pd.to_datetime(df["report_date"], errors="coerce").dt.date
-        df["ann_date"] = pd.to_datetime(df["ann_date"], errors="coerce").dt.date
-        df = df.dropna(subset=["report_date"])
-        # 年报/累计季报两路偶有重叠 report_date 时,取公告日较早者(更贴近真实披露时点)
-        return (df.sort_values("ann_date")
-                  .drop_duplicates(subset=["report_date"], keep="first")
-                  .sort_values("report_date").reset_index(drop=True))
-
-    # hk: 三级探测均落空(见上方模块说明),report_date 取指标接口报告期、ann_date 恒 NULL
-    df = with_retry(ak.stock_financial_hk_analysis_indicator_em, symbol=symbol, indicator="报告期")
-    if df is None or df.empty or "REPORT_DATE" not in df.columns:
-        return pd.DataFrame(columns=["report_date", "ann_date"])
-    rd = pd.to_datetime(df["REPORT_DATE"], errors="coerce").dt.date
-    out = pd.DataFrame({"report_date": rd, "ann_date": [None] * len(df)})
-    return out.dropna(subset=["report_date"]).drop_duplicates(subset=["report_date"]).reset_index(drop=True)
+    code = futu_code(stock_code)
+    reports = _futu_fetch_reports(code, _FUTU_INDICATOR_TYPE)
+    return _futu_indicator_reports_to_df(stock_code, reports)
 
 
 # ---------------------------------------------------------------------------
 # em 备源(ASTOCK_INTL_FUND_SOURCE=em 时启用):东财长表 pivot 成与 futu 路径同构的
 # DataFrame[report_date, currency, period_kind, data(dict)]。currency/period_kind 东财
 # 长表无对应字段,如实置 NULL(不臆造)。美股按 brief"美股季报科目在'累计'"的实测结论,
-# "年报"+"累计季报"两枚举取并集(与 fetch_intl_ann_dates 的 us 分支同一策略),覆盖
+# "年报"+"累计季报"两枚举取并集(与美股 ann_date 回填同一策略,见 12_init_fundamental_intl.py
+# _fetch_us_ann_and_indicators),覆盖
 # FY/H1/9M;"单季报"(含 Q1)同样不纳入 —— 与 futu 路径的累计口径规则保持一致语义。
 # ---------------------------------------------------------------------------
 _EM_STMT_HK = {"income": "利润表", "balance": "资产负债表", "cashflow": "现金流量表"}

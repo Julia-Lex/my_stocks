@@ -75,11 +75,10 @@ def make_updater(market: str, task_stk: str):
 
         n_ind = 0
         ind_reports = _fetch_recent_reports(code, c._FUTU_INDICATOR_TYPE)
-        ind = c._futu_indicator_reports_to_df(r.stock_code, ind_reports) \
-            if hasattr(c, "_futu_indicator_reports_to_df") else None
-        if ind is None:
-            # common 未暴露底层转换时退化为全量指标接口(仍受节流保护,只是多翻页)
-            ind = c.fetch_intl_fund_indicator(r.stock_code)
+        # 复用 common._futu_indicator_reports_to_df(2026-07-11 最终审查 M3 抽出的模块级
+        # 转换):直接喂首页 reports,省下每股每周 1 次全量分页的指标请求(不必再退化到
+        # fetch_intl_fund_indicator 的全量翻页路径)。
+        ind = c._futu_indicator_reports_to_df(r.stock_code, ind_reports)
         if not ind.empty:
             cols = ["stock_code", "report_date", "currency"] + c._FUND_INDICATOR_COLS
             rows = []
@@ -130,15 +129,23 @@ def main() -> int:
             stocks = stocks.head(args.limit)
 
         rows = list(stocks.itertuples(index=False))
-        c.log.info("[%s] 基本面增量核查 %d 只(最近 %d 期窗口,并发 %d)...",
-                   market, len(rows), _RECENT_NUM, args.workers)
-        # 每轮核查全量重跑:先清掉上一轮的 per-stock 进度(哨兵行保留)
+        # 断点续传(2026-07-11 最终审查 M3):不再"跑前先清空" per-stock 进度 —— 那样一旦
+        # 跑到一半崩溃(富途网关断线/东财熔断等),本轮已完成的股票也会在下次重试时被当
+        # 成没跑过,白白重复请求。改为 get_done_codes 过滤 todo,只处理本轮尚未标记 done
+        # 的股票;全部跑完后才清空 task_stk 进度,好让下一次到期核查(7 天后)重新全量核查
+        # (而不是被上一轮的 done 记录挡住,永远查不到新披露)。
+        done = c.get_done_codes(conn, task_stk)
+        todo = [r for r in rows if r.stock_code not in done]
+        c.log.info("[%s] 基本面增量核查 %d 只(最近 %d 期窗口,待处理 %d/已完成 %d,并发 %d)...",
+                   market, len(rows), _RECENT_NUM, len(todo), len(done), args.workers)
+
+        c.run_stock_todo(todo, task_stk, make_updater(market, task_stk), args.workers,
+                         max_consecutive_errors=15)
+
+        # 本轮全部完成:清空 per-stock 进度供下一到期周期重新全量核查
         with conn.cursor() as cur:
             cur.execute("DELETE FROM etl_progress WHERE task=%s", (task_stk,))
         conn.commit()
-
-        c.run_stock_todo(rows, task_stk, make_updater(market, task_stk), args.workers,
-                         max_consecutive_errors=15)
 
         c.mark_progress(conn, task, "_check", date.today(), "done",
                         f"checked={len(rows)}")

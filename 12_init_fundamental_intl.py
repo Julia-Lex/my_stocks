@@ -3,7 +3,7 @@
 
 阶段A 逐股(run_stock_todo):3 张报表 + 1 份关键指标 → {p}fin_statement / {p}fin_indicator
       每股 4 次富途分页调用(全局 1.05s 节流 ⇒ workers>1 仅重叠 DB 写入,建议 --workers 2)
-阶段B ann_date 回填(东财,逐股 1-2 请求):fetch_intl_ann_dates 语义 → UPDATE 两表 ann_date
+阶段B ann_date 回填(东财,逐股 1-2 请求):_fetch_us_ann_and_indicators → UPDATE 两表 ann_date
       (LEAST 合并语义同二期;港股 ann_date 三级探测已知全部落空 —— 见 task-2-report,整阶段
       跳过并 log.warning,不做无意义的逐股请求)。
 
@@ -184,16 +184,20 @@ _EM_US_IND_MAP = {
 
 
 def _fetch_us_ann_and_indicators(symbol: str) -> tuple[pd.DataFrame, int]:
+    """直接调东财美股指标接口("年报"+"累计季报"并集,同美股 ann_date 回填一贯策略),
+    取 ann_date 之外顺手带出可映射的指标值。
+
+    返回 (df[report_date, ann_date, revenue, revenue_yoy, ..., current_ratio], 护栏丢弃行数)。
+    "年报"(DATE_TYPE_CODE=001)+ "累计季报"(002/004,H1/9M)取并集;"单季报"(含 Q1)
+    不纳入,同为已知覆盖缺口。
+
+    2026-07-11 最终审查 M4:归一化语句原先写在这个 docstring 之前(58c98c6 引入),
+    导致这段三引号字符串不再是函数第一条语句,Python 不会把它识别为 `__doc__`(只是
+    一条无副作用的字符串表达式)——调整顺序恢复其文档字符串身份。
+    """
     # 东财美股符号用下划线表示点号股类别(BRK.B → BRK_B,2026-07-11 实测:
     # BRK.B/BRK-B/BRKB 均无数据,BRK_B 返回 22 行),入口处归一化。
     symbol = symbol.replace(".", "_")
-    """直接调东财美股指标接口(绕过 common.fetch_intl_ann_dates 的窄列裁剪:那个函数
-    只返回 report_date/ann_date 两列),取 ann_date 之外顺手带出可映射的指标值。
-
-    返回 (df[report_date, ann_date, revenue, revenue_yoy, ..., current_ratio], 护栏丢弃行数)。
-    "年报"(DATE_TYPE_CODE=001)+ "累计季报"(002/004,H1/9M)取并集,与 common.py
-    fetch_intl_ann_dates 的 us 分支同一策略;"单季报"(含 Q1)不纳入,同为已知覆盖缺口。
-    """
     import akshare as ak
 
     def _safe_call(sym: str, indicator: str) -> pd.DataFrame:
@@ -238,7 +242,7 @@ def _fetch_us_ann_and_indicators(symbol: str) -> tuple[pd.DataFrame, int]:
         df[dst] = pd.to_numeric(df[src], errors="coerce") if src in df.columns else pd.NA
 
     # 同 report_date 若"年报"/"累计季报"两路重叠(理论上不会,不同报表类型报告期不重叠),
-    # 取 ann_date 较早者,与 common.fetch_intl_ann_dates 的 us 分支去重语义一致
+    # 取 ann_date 较早者(更贴近真实披露时点)
     out = (df[empty_cols].sort_values("ann_date")
                           .drop_duplicates(subset=["report_date"], keep="first")
                           .sort_values("report_date").reset_index(drop=True))
