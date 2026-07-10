@@ -31,3 +31,45 @@ def test_search_no_match():
 def test_search_limit_10():
     r = client.get("/api/search", params={"q": "银行"})
     assert len(r.json()) <= 10
+
+
+def test_statements_cn():
+    r = client.get("/api/statements", params={"market": "cn", "code": "300308.SZ"})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["name"] == "中际旭创"
+    assert d["currency"] == "CNY"
+    # 近 3 年年报 + 今年各期
+    assert "2025-12-31" in d["periods"] and "2026-03-31" in d["periods"]
+    assert "2022-12-31" not in d["periods"]
+    for stmt in ("income", "balance", "cashflow"):
+        block = d["statements"][stmt]
+        assert block["key_items"], stmt
+        assert block["rows"], stmt
+        # key_items 都真实存在于 rows
+        row_names = {row["item"] for row in block["rows"]}
+        assert set(block["key_items"]) <= row_names
+    # 摘要:2026Q1 营收 195 亿左右
+    rev = next(s for s in d["summary"] if s["label"] == "营业收入")
+    assert 1.9e10 < rev["value"] < 2.0e10
+    assert any(s["label"] == "资产负债率" for s in d["summary"])
+
+
+def test_statements_hk():
+    # 00001.HK(长和)是 hk_fin_statement 覆盖的少数港股之一
+    r = client.get("/api/statements", params={"market": "hk", "code": "00001.HK"})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["currency"]  # 港股有币种列
+    assert d["statements"]["income"]["rows"]
+
+
+def test_statements_no_data():
+    r = client.get("/api/statements", params={"market": "hk", "code": "99999.HK"})
+    assert r.status_code == 404
+    assert r.json()["detail"] == "该股票暂无财报数据"
+
+
+def test_statements_bad_market():
+    r = client.get("/api/statements", params={"market": "xx", "code": "300308.SZ"})
+    assert r.status_code == 422
