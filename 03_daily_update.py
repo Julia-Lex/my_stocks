@@ -125,13 +125,25 @@ def main() -> int:
         total = 0
         active = [r for r in stocks.itertuples(index=False)]
         c.log.info("增量更新 %d 只 ...", len(active))
+        # 熔断:与 run_stock_todo 同口径。2026-07-10 实案:东财封禁期 cron 启动本脚本,
+        # 无熔断的串行循环以 ~35s/只 逐股撞墙,5500 只要撞 ~45 小时且不断续期封禁。
+        # 增量按库内 max(trade_date) 补漏,提前退出零损失,下次运行自动接着补。
+        consecutive_errors = 0
         for i, r in enumerate(active, 1):
             try:
                 total += update_one(conn, r.stock_code, r.symbol, args.days)
+                consecutive_errors = 0
             except Exception as exc:  # noqa: BLE001
                 conn.rollback()
                 c.mark_progress(conn, TASK, r.stock_code, None, status="error", message=str(exc))
                 c.log.error("  %s 失败: %s", r.stock_code, exc)
+                consecutive_errors += 1
+                if consecutive_errors >= 15:
+                    c.log.critical(
+                        "连续 %d 只失败,疑似数据源被封禁(WAF/限流),提前终止本次增量"
+                        "(已处理 %d / %d)。冷却后重跑或等明日 cron,补漏机制自动补齐。",
+                        consecutive_errors, i, len(active))
+                    break
             if i % 200 == 0:
                 c.log.info("进度 %d / %d,累计写入 %d 行", i, len(active), total)
 
