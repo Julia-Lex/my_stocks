@@ -239,15 +239,31 @@ def _clip(expr: str, cond: str, limit: str = "1e6") -> str:
     return f"CASE WHEN {cond} AND abs({expr}) < {limit} THEN {expr} END"
 
 
-def phase4_derive(conn) -> None:
+def phase4_derive(conn, stock_codes: list[str] | None = None) -> None:
+    """阶段4:派生列 + ann_date 回填(纯 SQL,无网络)。
+
+    stock_codes=None(默认,本脚本全量初始化路径):三条 UPDATE 均不加过滤,全表重算。
+    传入股票代码列表时(10_fundamental_update.py 每日增量复用本函数的路径):
+    三条 UPDATE 均加 stock_code = ANY(%s) 范围过滤,只重算这些股票——每日增量
+    只有"本次 ann_date 有变化"的一小撮股票需要重算,不应对几十万行 fin_indicator/
+    fin_statement 做无谓全表扫描。空列表([])会被过滤条件正确匹配为零行(不同于
+    None 的"不过滤"),调用方仍应在自己一侧先判断"无变化则不必调用本函数"以省一次
+    空转的数据库往返。
+    """
+    scope_fs = "AND fs.stock_code = ANY(%s)" if stock_codes is not None else ""
+    scope_fi = "WHERE stock_code = ANY(%s)" if stock_codes is not None else ""
+    scope_join = "AND fi.stock_code = ANY(%s)" if stock_codes is not None else ""
+    p = (stock_codes,) if stock_codes is not None else ()
+
     with conn.cursor() as cur:
         c.log.info("阶段4a: 回填 fin_statement.ann_date ...")
-        cur.execute("""
+        cur.execute(f"""
             UPDATE fin_statement fs SET ann_date = fi.ann_date
             FROM fin_indicator fi
             WHERE fs.stock_code = fi.stock_code AND fs.report_date = fi.report_date
               AND fs.ann_date IS NULL AND fi.ann_date IS NOT NULL
-        """)
+              {scope_fs}
+        """, p)
         c.log.info("  ann_date 回填 %d 行", cur.rowcount)
         conn.commit()
 
@@ -258,7 +274,8 @@ def phase4_derive(conn) -> None:
               roa           = {_clip("net_profit / total_assets * 100", "total_assets <> 0")},
               debt_ratio    = {_clip("total_liab / total_assets * 100", "total_assets <> 0")},
               ocf_to_profit = {_clip("ocf / net_profit", "net_profit <> 0")}
-        """)
+            {scope_fi}
+        """, p)
         c.log.info("  派生列更新 %d 行", cur.rowcount)
         conn.commit()
 
@@ -273,7 +290,8 @@ def phase4_derive(conn) -> None:
               AND fs.stock_code = fi.stock_code AND fs.report_date = fi.report_date
               AND (fs.data->>'流动资产合计') ~ '^[0-9.eE+-]+$'
               AND (fs.data->>'流动负债合计') ~ '^[0-9.eE+-]+$'
-        """)
+              {scope_join}
+        """, p)
         c.log.info("  current_ratio 更新 %d 行", cur.rowcount)
         conn.commit()
 
