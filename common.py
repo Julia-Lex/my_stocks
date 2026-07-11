@@ -1921,7 +1921,13 @@ def fetch_board_cons(board_code: str, board_type: str) -> set[str]:
     """板块当前成分股(全代码集合)。两源均按板块代码调用,规避板块改名。"""
     if BOARD_SOURCE == "futu":
         _futu_pace(_futu_ps_last)   # get_plate_stock 同为 10 次/30s 低频接口
-        df = _futu_call("get_plate_stock", board_code)
+        try:
+            df = _futu_call("get_plate_stock", board_code)
+        except RuntimeError as exc:
+            if "未知股票" in str(exc):   # 僵尸残留板块:列表有、行情系统不认(与日线容错同因)
+                log.warning("%s: 富途无板块成分(列表残留),按空处理", board_code)
+                return set()
+            raise
         if df is None or df.empty:
             return set()
         # 富途代码 'SZ.000333' -> '000333.SZ'
