@@ -277,6 +277,24 @@ def test_watchlist_groups_and_order():
     client.delete("/api/watchlist/cn/300476.SZ")
 
 
+def test_todo_crud():
+    """待办:增/查/勾选/删。"""
+    r = client.post("/api/todos", json={"content": "测试待办-可删"})
+    assert r.status_code == 200
+    tid = r.json()["id"]
+    items = client.get("/api/todos").json()["items"]
+    hit = next(i for i in items if i["id"] == tid)
+    assert hit["content"] == "测试待办-可删" and hit["done"] is False and hit["created_at"]
+    r = client.patch(f"/api/todos/{tid}", json={"done": True})
+    assert r.status_code == 200
+    hit = next(i for i in client.get("/api/todos").json()["items"] if i["id"] == tid)
+    assert hit["done"] is True and hit["done_at"]
+    assert client.delete(f"/api/todos/{tid}").status_code == 200
+    assert all(i["id"] != tid for i in client.get("/api/todos").json()["items"])
+    # 空内容拒绝
+    assert client.post("/api/todos", json={"content": "  "}).status_code == 422
+
+
 def test_index_kline():
     """市场指数日线 + 全市场总成交量(该市场全部个股当日 volume 之和)。"""
     r = client.get("/api/index/kline",
