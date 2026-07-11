@@ -92,7 +92,7 @@ ASTOCK_DB_USER=zhu .venv/bin/python 03_daily_update.py
 0 3 * * 0 /Users/zhu/backups/astock/backup_astock.sh >> /Users/zhu/backups/astock/backup.log 2>&1
 ```
 
-注:A股板块日更(13_board_update.py)由板块会话负责,截至本快照未挂 cron。各章节内的 cron 示例以本表为准。
+注:A股板块日更(21_board_update.py)由板块会话负责,截至本快照未挂 cron。各章节内的 cron 示例以本表为准。
 
 ## 常用查询
 
