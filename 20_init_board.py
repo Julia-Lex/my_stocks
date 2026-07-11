@@ -1,5 +1,5 @@
 """
-12_init_board.py — 板块数据层全量初始化(行业+概念,断点续传)。
+20_init_board.py — 板块数据层全量初始化(行业+概念,断点续传)。
 
 流程:
   1. 板块列表 → board(幂等 upsert);
@@ -8,9 +8,9 @@
   3. 断点续传:etl_progress task='init_board',stock_code 字段借存 board_code。
 
 用法:
-  ASTOCK_DB_USER=zhu .venv/bin/python 12_init_board.py --workers 3
-  ASTOCK_DB_USER=zhu .venv/bin/python 12_init_board.py --limit 5   # 试跑
-  ASTOCK_DB_USER=zhu .venv/bin/python 12_init_board.py --reset
+  ASTOCK_DB_USER=zhu .venv/bin/python 20_init_board.py --workers 3
+  ASTOCK_DB_USER=zhu .venv/bin/python 20_init_board.py --limit 5   # 试跑
+  ASTOCK_DB_USER=zhu .venv/bin/python 20_init_board.py --reset
 
 请求量 ≈ 板块数×3 ≈ 1600 次,3 并发约 15-20 分钟。全部为东财行情族接口,
 限流特征见 memory eastmoney-rate-limit;遇熔断等冷却后重跑即续传。

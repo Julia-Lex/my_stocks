@@ -1,5 +1,5 @@
 """
-13_board_update.py — 板块每日增量(cron 18:10,排在 03 日线 18:00 之后)。
+21_board_update.py — 板块每日增量(cron 18:10,排在 03 日线 18:00 之后)。
 
 流程:
   1. 刷新板块列表:新板块 → 插入并补拉全历史(复用 12 的 load_one_board);
@@ -18,7 +18,7 @@ from importlib import import_module
 
 import common as c
 
-init_board = import_module("12_init_board")
+init_board = import_module("20_init_board")
 TASK = "daily_board"
 
 

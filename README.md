@@ -92,7 +92,7 @@ ASTOCK_DB_USER=zhu .venv/bin/python 03_daily_update.py
 0 3 * * 0 /Users/zhu/backups/astock/backup_astock.sh >> /Users/zhu/backups/astock/backup.log 2>&1
 ```
 
-注:A股板块日更(13_board_update.py)由板块会话负责,截至本快照未挂 cron。各章节内的 cron 示例以本表为准。
+注:A股板块日更(21_board_update.py)由板块会话负责,截至本快照未挂 cron。各章节内的 cron 示例以本表为准。
 
 ## 常用查询
 
@@ -379,8 +379,8 @@ WHERE m.stock_code = '00700.HK' AND m.out_date IS NULL;
 
 ```bash
 psql -U zhu -d astock -f 11_schema_board.sql
-ASTOCK_BOARD_SOURCE=futu ASTOCK_DB_USER=zhu .venv/bin/python 12_init_board.py --workers 1  # 富途全量(限频串行,~55min)
-ASTOCK_BOARD_SOURCE=futu ASTOCK_DB_USER=zhu .venv/bin/python 13_board_update.py            # 每日增量
+ASTOCK_BOARD_SOURCE=futu ASTOCK_DB_USER=zhu .venv/bin/python 20_init_board.py --workers 1  # 富途全量(限频串行,~55min)
+ASTOCK_BOARD_SOURCE=futu ASTOCK_DB_USER=zhu .venv/bin/python 21_board_update.py            # 每日增量
 # 东财口径(解封后):不带 ASTOCK_BOARD_SOURCE 或 =em,可用 --workers 3
 ```
 
@@ -414,7 +414,7 @@ WHERE m.stock_code = '600519.SH' AND m.valid_to IS NULL;
 
 ```cron
 # 19:30 起跑:避开港美股板块链的 18:50-19:20 富途限频窗口(账号级共享,跨会话约定)
-30 19 * * 1-5  cd /Users/zhu/own/my_stocks && ASTOCK_BOARD_SOURCE=futu ASTOCK_DB_USER=zhu .venv/bin/python 13_board_update.py >> update_board.log 2>&1
+30 19 * * 1-5  cd /Users/zhu/own/my_stocks && ASTOCK_BOARD_SOURCE=futu ASTOCK_DB_USER=zhu .venv/bin/python 21_board_update.py >> update_board.log 2>&1
 ```
 
 ## 后续(第二期)
