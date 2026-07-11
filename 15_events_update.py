@@ -5,9 +5,8 @@
   * 龙虎榜:回看最近 5 个交易日,补 etl_progress 无记录或标 error 的日子(幂等)。
   * 预告/快报:披露季(1/2/4/7/8/10 月)每日核查最近 2 个报告期;平季 7 天门控
     (哨兵 task='daily_events', stock_code='_check')。
-  * 北向:全域逐股增量(从库内该股 max(trade_date) 起;非陆股通标的空返回秒过);
-    量大,与预告/快报共用披露季/门控节奏(北向本质日频,7 天粒度可接受——
-    每次核查整段补齐,无数据损失)。
+  * 北向:源序列已随 2024-08 披露改制终结(库内止于 2024-08-16),默认跳过;
+    --with-nb 可手动全域重查(若源恢复)。
   * alias 周报:etl_progress 中连续 error 的股票汇总告警(人工处置,不自动改域)。
 
 cron(README 同步): 0 19 * * 1-5
@@ -107,10 +106,12 @@ def update_cross_recent(conn) -> None:
 
 
 def update_nb(conn, workers: int, limit: int | None) -> None:
-    """北向:清 done 全域重查(fetch 为全序列拉取,upsert 幂等;非标的空返回秒过)。"""
-    with conn.cursor() as cur:
-        cur.execute("DELETE FROM etl_progress WHERE task=%s", (_m14.TASK_NB,))
-    conn.commit()
+    """北向:清 done 全域重查(fetch 为全序列拉取,upsert 幂等;非标的空返回秒过)。
+    --limit 试跑时不清进度(否则一次试跑会把 ~5,400 条 done 账本清成 N 条)。"""
+    if not limit:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM etl_progress WHERE task=%s", (_m14.TASK_NB,))
+        conn.commit()
     _m14.init_nb(conn, workers, limit)
 
 
@@ -119,7 +120,7 @@ def alias_report(conn) -> None:
     with conn.cursor() as cur:
         cur.execute(
             "SELECT task, stock_code, left(message, 60) FROM etl_progress "
-            "WHERE status='error' AND task LIKE 'init_fund%%' "
+            "WHERE status='error' AND (task LIKE 'init_fund%%' OR task LIKE 'daily_fund%%_stk') "
             "AND stock_code NOT LIKE '%%:%%' "   # 排除 'YYYYMMDD:kind' 复合键(截面期误报)
             "ORDER BY task, stock_code LIMIT 20")
         rows = cur.fetchall()
@@ -135,6 +136,8 @@ def main() -> int:
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--workers", type=int, default=3)
+    ap.add_argument("--with-nb", action="store_true",
+                    help="强制重查北向(源序列已于 2024-08 终结,默认跳过)")
     args = ap.parse_args()
 
     conn = c.get_conn()
@@ -145,8 +148,12 @@ def main() -> int:
         if _due(conn, args.force):
             c.log.info("=== 预告/快报核查(最近 2 期) ===")
             update_cross_recent(conn)
-            c.log.info("=== 北向持股全域刷新 ===")
-            update_nb(conn, args.workers, args.limit)
+            if args.with_nb:
+                c.log.info("=== 北向持股全域刷新(手动探针) ===")
+                update_nb(conn, args.workers, args.limit)
+            else:
+                c.log.info("北向序列已随 2024-08 披露改制终结(库内止于 2024-08-16),"
+                           "默认跳过;若源恢复用 --with-nb 手动重查")
             alias_report(conn)
             c.mark_progress(conn, TASK, "_check", date.today(), "done", "full check")
         else:

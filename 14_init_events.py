@@ -183,12 +183,19 @@ def main() -> int:
     conn = c.get_conn()
     try:
         if args.reset:
-            tasks = {"cross": [TASK_CROSS], "lhb": [TASK_CROSS], "nb": [TASK_NB],
-                     "all": [TASK_CROSS, TASK_NB]}[args.part]
+            # cross 与 lhb 共用 task 名但键后缀不同(:yjyg/:yjkb vs :lhb),按后缀限定
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM etl_progress WHERE task = ANY(%s)", (tasks,))
+                if args.part in ("cross", "all"):
+                    cur.execute("DELETE FROM etl_progress WHERE task=%s AND "
+                                "(stock_code LIKE '%%:yjyg' OR stock_code LIKE '%%:yjkb')",
+                                (TASK_CROSS,))
+                if args.part in ("lhb", "all"):
+                    cur.execute("DELETE FROM etl_progress WHERE task=%s AND stock_code LIKE '%%:lhb'",
+                                (TASK_CROSS,))
+                if args.part in ("nb", "all"):
+                    cur.execute("DELETE FROM etl_progress WHERE task=%s", (TASK_NB,))
             conn.commit()
-            c.log.info("已清空进度 %s", tasks)
+            c.log.info("已清空 %s 进度(按键前缀限定)", args.part)
 
         if args.part in ("cross", "all"):
             c.log.info("=== 业绩预告/快报截面 ===")
