@@ -341,7 +341,8 @@ function drawKline(bars){
   const lo = Math.min(...bars.map(b=>b.l)), hi = Math.max(...bars.map(b=>b.h));
   const m = (hi-lo)*0.05, pLo = lo-m, pHi = hi+m;
   const vMax = Math.max(...bars.map(b=>b.v));
-  const x = i => padL + i*step + step/2;
+  // 从右缘倒排:最新一根贴右侧,数据少时左侧留白(数据满时与正排等价)
+  const x = i => W - padR - (n-i)*step + step/2;
   const py = p => padT + (pHi-p)/(pHi-pLo)*h;
   const vy = v => padT + h - (v/vMax)*(h*0.28);   // 成交量占底部 28% 高度
 
