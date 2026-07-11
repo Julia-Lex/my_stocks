@@ -17,6 +17,8 @@ import argparse
 import sys
 from datetime import date, datetime, timedelta
 
+import psycopg2.extras
+
 import common as c
 
 
@@ -54,6 +56,23 @@ def update_reference(conn, market: str):
     c.upsert(conn, f"{p}stock_basic", cols,
              [tuple(getattr(r, x) for x in cols) for r in stocks.itertuples(index=False)],
              ["stock_code"], update_cols=["name", "exchange"])
+    if market == "hk":
+        # 补充中文简称。失败非致命:中文名缺失只影响按中文搜索。
+        # 纯 UPDATE(不 INSERT):清单里没有的代码直接忽略,不会撞非空约束
+        try:
+            names = c.fetch_hk_names_cn()
+            with conn.cursor() as cur:
+                psycopg2.extras.execute_values(
+                    cur,
+                    "UPDATE hk_stock_basic b SET name_cn = v.name_cn "
+                    "FROM (VALUES %s) AS v(stock_code, name_cn) "
+                    "WHERE b.stock_code = v.stock_code",
+                    [(r.stock_code, r.name_cn) for r in names.itertuples(index=False)])
+            conn.commit()
+            c.log.info("港股中文名已更新 %d 条", len(names))
+        except Exception as exc:  # noqa: BLE001
+            conn.rollback()
+            c.log.warning("港股中文名更新失败(跳过): %s", exc)
     for idx in cfg["indexes"]:
         try:
             c.upsert_index(conn, idx, c.fetch_intl_index(market, idx),

@@ -22,6 +22,16 @@ def test_search_by_code():
     assert any(i["code"] == "00700.HK" and i["market"] == "hk" for i in r.json())
 
 
+def test_search_hk_by_chinese_name():
+    # 港股中文名(name_cn,东财/A+H 对照口径):搜"胜宏"应同时出 A股和 H股
+    r = client.get("/api/search", params={"q": "胜宏"})
+    assert r.status_code == 200
+    codes = {i["code"] for i in r.json()}
+    assert {"300476.SZ", "02476.HK"} <= codes
+    hk = next(i for i in r.json() if i["code"] == "02476.HK")
+    assert hk["name"] == "胜宏科技"   # 有中文名时展示中文
+
+
 def test_search_no_match():
     r = client.get("/api/search", params={"q": "zzz不存在的股票zzz"})
     assert r.status_code == 200

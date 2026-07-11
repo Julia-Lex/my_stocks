@@ -11,7 +11,8 @@
 CREATE TABLE IF NOT EXISTS hk_stock_basic (
     stock_code   VARCHAR(12) PRIMARY KEY,   -- 00700.HK
     symbol       VARCHAR(6)  NOT NULL,      -- 00700
-    name         VARCHAR(64),
+    name         VARCHAR(64),               -- HKEX 官方英文简称(如 VGT)
+    name_cn      VARCHAR(64),               -- 中文简称(东财口径,如 胜宏科技;可能为空)
     exchange     VARCHAR(8)  NOT NULL DEFAULT 'HKEX',
     list_date    DATE,
     delist_date  DATE,

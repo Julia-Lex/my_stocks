@@ -19,31 +19,38 @@ from common import get_conn  # noqa: E402
 
 app = FastAPI(title="财报查询")
 
-# market → 表名映射。has_currency=False 表示无币种列(A股恒为 CNY)
+# market → 表名映射。has_currency=False 表示无币种列(A股恒为 CNY)。
+# name_expr:展示名——港股优先中文简称(name_cn,可能为空),回退英文简称
 MARKETS = {
-    "cn": {"basic": "stock_basic", "stmt": "fin_statement", "has_currency": False},
-    "hk": {"basic": "hk_stock_basic", "stmt": "hk_fin_statement", "has_currency": True},
-    "us": {"basic": "us_stock_basic", "stmt": "us_fin_statement", "has_currency": True},
+    "cn": {"basic": "stock_basic", "stmt": "fin_statement", "has_currency": False,
+           "name_expr": "name", "search_cols": ["name", "stock_code"]},
+    "hk": {"basic": "hk_stock_basic", "stmt": "hk_fin_statement", "has_currency": True,
+           "name_expr": "COALESCE(name_cn, name)",
+           "search_cols": ["name", "name_cn", "stock_code"]},
+    "us": {"basic": "us_stock_basic", "stmt": "us_fin_statement", "has_currency": True,
+           "name_expr": "name", "search_cols": ["name", "stock_code"]},
 }
 
 
 @app.get("/api/search")
 def search(q: str = Query(..., min_length=1, max_length=32)):
-    """按名字/代码模糊搜索三个市场,A股优先,最多 10 条。"""
+    """按名字/代码模糊搜索三个市场(港股含中文名),A股优先,最多 10 条。"""
     pat = f"%{q.strip()}%"
-    sql = " UNION ALL ".join(
-        f"SELECT stock_code, name, '{m}' AS market, "
-        f"EXISTS (SELECT 1 FROM {cfg['stmt']} f WHERE f.stock_code = s.stock_code) AS has_statements "
-        f"FROM {cfg['basic']} s WHERE s.name ILIKE %s OR s.stock_code ILIKE %s"
-        for m, cfg in MARKETS.items()
-    )
+    parts, params = [], []
+    for m, cfg in MARKETS.items():
+        cond = " OR ".join(f"s.{col} ILIKE %s" for col in cfg["search_cols"])
+        parts.append(
+            f"SELECT stock_code, {cfg['name_expr']} AS name, '{m}' AS market, "
+            f"EXISTS (SELECT 1 FROM {cfg['stmt']} f WHERE f.stock_code = s.stock_code) AS has_statements "
+            f"FROM {cfg['basic']} s WHERE {cond}")
+        params += [pat] * len(cfg["search_cols"])
     # A股在前,有财报的在前,名字短的在前(更可能是精确命中)
-    sql = (f"SELECT * FROM ({sql}) t "
+    sql = (f"SELECT * FROM ({' UNION ALL '.join(parts)}) t "
            f"ORDER BY (market <> 'cn'), (NOT has_statements), length(name), stock_code LIMIT 10")
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute(sql, [pat, pat] * len(MARKETS))
+            cur.execute(sql, params)
             rows = cur.fetchall()
     finally:
         conn.close()
@@ -138,7 +145,8 @@ def statements(market: Literal["cn", "hk", "us"], code: str = Query(..., max_len
                 (code, since),
             )
             rows = cur.fetchall()
-            cur.execute(f"SELECT name FROM {cfg['basic']} WHERE stock_code = %s", (code,))
+            cur.execute(f"SELECT {cfg['name_expr']} FROM {cfg['basic']} WHERE stock_code = %s",
+                        (code,))
             name_row = cur.fetchone()
     finally:
         conn.close()
@@ -217,7 +225,8 @@ def fundamental(market: Literal["cn", "hk", "us"], code: str = Query(..., max_le
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute(f"SELECT name FROM {cfg['basic']} WHERE stock_code = %s", (code,))
+            cur.execute(f"SELECT {cfg['name_expr']} FROM {cfg['basic']} WHERE stock_code = %s",
+                        (code,))
             name_row = cur.fetchone()
             if name_row is None:
                 raise HTTPException(status_code=404, detail="未找到该股票")
