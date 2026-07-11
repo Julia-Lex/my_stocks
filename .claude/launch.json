@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "webapp",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["ASTOCK_DB_USER=zhu", ".venv/bin/uvicorn", "webapp.app:app", "--port", "8500"],
+      "port": 8500
+    }
+  ]
+}
