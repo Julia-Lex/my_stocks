@@ -1811,7 +1811,7 @@ def fetch_board_list() -> pd.DataFrame:
 # 富途低频接口限频 10 次/30s(request_history_kline、get_plate_stock 实测均是),
 # 比 _futu_call 的通用节流(1.05s)严——每个接口一把独立时钟,3.1s 间隔;
 # request_history_kline 返回三元组,也与 _futu_call 的二元组解包不兼容。
-_FUTU_KL_INTERVAL = float(os.getenv("ASTOCK_FUTU_KL_INTERVAL", "3.1"))
+_FUTU_KL_INTERVAL = float(os.getenv("ASTOCK_FUTU_KL_INTERVAL", "3.6"))  # 3.1 恰好骑 10次/30s 红线,并发抖动会偶发越界(2026-07-11 13试跑实测 52 次拒绝)
 _futu_kl_last = [0.0]
 _futu_ps_last = [0.0]   # get_plate_stock 专用时钟
 

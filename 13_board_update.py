@@ -84,9 +84,12 @@ def main() -> int:
                         (c.BOARD_SOURCE,))
             active = {r[0] for r in cur.fetchall()}
         todo = [r for r in rows if r.stock_code in active]
-        c.log.info("板块增量:%d 个(并发 3)", len(todo))
+        # futu 源吞吐瓶颈是账号级节流时钟,多线程不提速反而让请求扎堆越过
+        # 10次/30s 红线(2026-07-11 试跑 3 并发实测 52 次限频拒绝)→ 强制单线程
+        workers = 1 if c.BOARD_SOURCE == "futu" else 3
+        c.log.info("板块增量:%d 个(源 %s,并发 %d)", len(todo), c.BOARD_SOURCE, workers)
         conn.commit()
-        c.run_stock_todo(todo, TASK, update_one_board, 3, max_consecutive_errors=15)
+        c.run_stock_todo(todo, TASK, update_one_board, workers, max_consecutive_errors=15)
         c.log.info("板块增量完成 ✅")
         return 0
     finally:
