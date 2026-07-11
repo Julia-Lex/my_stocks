@@ -212,6 +212,26 @@ def test_kline_bad_period():
     assert r.status_code == 422
 
 
+def test_watchlist_crud():
+    """自选股:增删查,列表带名称与最新涨跌幅。"""
+    # 清理可能的残留
+    client.delete("/api/watchlist/cn/300308.SZ")
+    r = client.post("/api/watchlist", json={"market": "cn", "code": "300308.SZ"})
+    assert r.status_code == 200
+    r = client.post("/api/watchlist", json={"market": "cn", "code": "300308.SZ"})
+    assert r.status_code == 200                     # 重复添加幂等
+    items = client.get("/api/watchlist").json()["items"]
+    hit = next(i for i in items if i["code"] == "300308.SZ")
+    assert hit["name"] == "中际旭创" and hit["market"] == "cn"
+    assert hit["close"] and hit["pct_chg"] is not None
+    assert client.delete("/api/watchlist/cn/300308.SZ").status_code == 200
+    items = client.get("/api/watchlist").json()["items"]
+    assert all(i["code"] != "300308.SZ" for i in items)
+    # 非法市场
+    assert client.post("/api/watchlist",
+                       json={"market": "xx", "code": "1"}).status_code == 422
+
+
 def test_index_kline():
     """市场指数日线 + 全市场总成交量(该市场全部个股当日 volume 之和)。"""
     r = client.get("/api/index/kline",

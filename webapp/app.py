@@ -361,6 +361,72 @@ def kline(market: Literal["cn", "hk", "us"], code: str = Query(..., max_length=1
 
 
 # ---------------------------------------------------------------------------
+# 自选股(webapp 应用数据)
+# ---------------------------------------------------------------------------
+from pydantic import BaseModel  # noqa: E402
+
+
+class WatchItem(BaseModel):
+    market: Literal["cn", "hk", "us"]
+    code: str
+
+
+@app.get("/api/watchlist")
+def watchlist_get():
+    """自选股列表,带名称与最新收盘/涨跌幅(按各市场日线表最新一日)。"""
+    conn = get_conn()
+    items = []
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT market, stock_code, added_at FROM watchlist "
+                        "ORDER BY added_at")
+            rows = cur.fetchall()
+            for market, code, _ in rows:
+                cfg, qt = MARKETS[market], _QUOTE_TABLES[market]
+                cur.execute(
+                    f"SELECT {cfg['name_expr']} FROM {cfg['basic']} WHERE stock_code = %s",
+                    (code,))
+                nr = cur.fetchone()
+                cur.execute(
+                    f"SELECT close, pct_chg FROM {qt['price']} "
+                    f"WHERE stock_code = %s ORDER BY trade_date DESC LIMIT 1", (code,))
+                pr = cur.fetchone()
+                items.append({"market": market, "code": code,
+                              "name": nr[0] if nr else code,
+                              "close": float(pr[0]) if pr and pr[0] is not None else None,
+                              "pct_chg": float(pr[1]) if pr and pr[1] is not None else None})
+    finally:
+        conn.close()
+    return {"items": items}
+
+
+@app.post("/api/watchlist")
+def watchlist_add(item: WatchItem):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO watchlist (market, stock_code) VALUES (%s, %s) "
+                        "ON CONFLICT DO NOTHING", (item.market, item.code[:16]))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.delete("/api/watchlist/{market}/{code}")
+def watchlist_del(market: Literal["cn", "hk", "us"], code: str):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM watchlist WHERE market = %s AND stock_code = %s",
+                        (market, code))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
 # 市场指数
 # ---------------------------------------------------------------------------
 _INDEX_TABLES = {

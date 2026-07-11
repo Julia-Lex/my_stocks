@@ -86,6 +86,22 @@
   #kchart, #bkchart { width:100%; height:420px; display:block; cursor:crosshair; }
   #ffchart { width:100%; height:660px; display:block; }
   #indices { display:none; }
+  /* 个股页内部左列:自选股 */
+  #stockpane { display:flex; gap:16px; align-items:flex-start; }
+  #wlpanel { width:200px; flex:none; background:#fff; border:1px solid var(--border);
+             border-radius:12px; padding:10px; position:sticky; top:16px; }
+  .wl-title { font-size:13.5px; font-weight:600; color:#444; padding:2px 6px 8px; }
+  .wl-item { display:flex; align-items:center; gap:6px; padding:7px 8px;
+             border-radius:8px; cursor:pointer; font-size:13px; }
+  .wl-item:hover { background:#f0f4ff; }
+  .wl-item .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis;
+                 white-space:nowrap; }
+  .wl-item .nm small { display:block; color:var(--muted); font-size:11px; }
+  .wl-item .pct { font-size:12.5px; flex:none; }
+  .wl-item .del { flex:none; color:var(--muted); visibility:hidden; padding:0 2px; }
+  .wl-item:hover .del { visibility:visible; }
+  .wl-empty { color:var(--muted); font-size:12px; padding:6px 8px; line-height:1.6; }
+  .star { cursor:pointer; font-size:17px; margin-left:8px; color:#c9a227; }
   .ixchart { width:100%; height:340px; display:block; cursor:crosshair; }
   .ktip { position:absolute; display:none; pointer-events:none; background:rgba(20,20,20,.85);
           color:#fff; font-size:12px; padding:6px 9px; border-radius:8px; z-index:5;
@@ -127,11 +143,17 @@
 <div class="wrap">
   <div id="err"></div>
   <div id="stockpane">
-    <div class="searchbox">
-      <input id="q" placeholder="输入名字或代码,如:旭创 / 300308(港美股用代码或英文名,如 00700 / TENCENT)" autocomplete="off">
-      <div id="sug"></div>
+    <div id="wlpanel">
+      <div class="wl-title">自选股</div>
+      <div id="wl"></div>
     </div>
-    <div id="content"></div>
+    <div style="flex:1; min-width:0">
+      <div class="searchbox">
+        <input id="q" placeholder="输入名字或代码,如:旭创 / 300308(港美股用代码或英文名,如 00700 / TENCENT)" autocomplete="off">
+        <div id="sug"></div>
+      </div>
+      <div id="content"></div>
+    </div>
   </div>
   <div id="indices">
     <div class="sec">A股 <span class="ptabs" id="ixp-cn"></span>
@@ -246,6 +268,58 @@ function renderSug(items){
 }
 document.addEventListener('click', e=>{ if(!e.target.closest('.searchbox')) $('#sug').style.display='none'; });
 
+/* ---------- 自选股 ---------- */
+let wlItems = [];
+async function loadWatchlist(){
+  try{
+    const r = await fetch('/api/watchlist');
+    if(r.ok) wlItems = (await r.json()).items;
+  }catch(_){ /* 非致命 */ }
+  renderWl();
+}
+function renderWl(){
+  const box = $('#wl');
+  if(!wlItems.length){
+    box.innerHTML = '<div class="wl-empty">暂无自选。搜索选中股票后,点名称旁的 ☆ 添加。</div>';
+    return;
+  }
+  box.innerHTML = wlItems.map(i=>{
+    const p = i.pct_chg;
+    const ptxt = p==null ? '—' : (p>=0?'+':'')+p.toFixed(2)+'%';
+    const pcls = p==null ? '' : (p>=0 ? 'style="color:var(--up)"' : 'style="color:var(--down)"');
+    return `<div class="wl-item" data-m="${i.market}" data-c="${i.code}" data-n="${i.name}">
+      <span class="nm">${i.name}<small>${i.code}</small></span>
+      <span class="pct" ${pcls}>${ptxt}</span>
+      <span class="del" title="移除">✕</span></div>`;
+  }).join('');
+  box.querySelectorAll('.wl-item').forEach(el=>{
+    el.onclick = async e=>{
+      if(e.target.classList.contains('del')){
+        await fetch(`/api/watchlist/${el.dataset.m}/${encodeURIComponent(el.dataset.c)}`,
+                    {method:'DELETE'});
+        await loadWatchlist();
+        if(curStock) render();   // 星标同步
+        return;
+      }
+      $('#q').value = `${el.dataset.n} ${el.dataset.c}`;
+      pick({market:el.dataset.m, code:el.dataset.c, name:el.dataset.n});
+    };
+  });
+}
+const inWl = () => curStock && wlItems.some(i=>i.market===curStock.market && i.code===curStock.code);
+async function toggleWl(){
+  if(inWl()){
+    await fetch(`/api/watchlist/${curStock.market}/${encodeURIComponent(curStock.code)}`, {method:'DELETE'});
+  }else{
+    await fetch('/api/watchlist', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({market:curStock.market, code:curStock.code})});
+  }
+  await loadWatchlist();
+  render();
+}
+loadWatchlist();
+
 /* ---------- 选股与加载 ---------- */
 function pick(it){ curStock=it; quote=null; cur=null; tab='income'; expanded=false; loadStmt(); }
 
@@ -281,13 +355,15 @@ function render(){
   const sub = [`${s.code} · ${MK[s.market]}`];
   if(view==='stmt' && cur) sub.push(`币种:${CUR[cur.currency]||cur.currency||'未知'}`, `最新报告期:${cur.latest_period}`);
   $('#content').innerHTML = `
-    <div id="head">${s.name} <span class="sub">${sub.join(' · ')}</span></div>
+    <div id="head">${s.name}<span class="star" id="wlstar" title="${inWl()?'移出自选':'加入自选'}">${inWl()?'★':'☆'}</span>
+      <span class="sub">${sub.join(' · ')}</span></div>
     <div class="vtabs">
       <div class="vtab${view==='stmt'?' on':''}" data-v="stmt">财务报表</div>
       <div class="vtab${view==='quote'?' on':''}" data-v="quote">个股行情</div>
     </div>
     <div id="view"></div>`;
   document.querySelectorAll('.vtab').forEach(t=>t.onclick=()=>{ view=t.dataset.v; render(); });
+  $('#wlstar').onclick = toggleWl;
   view==='stmt' ? renderStmt() : renderQuote();
 }
 
@@ -568,7 +644,7 @@ const FFPERIODS = [['today','今日'],['5d','近5日'],['20d','近20日']];
 document.querySelectorAll('#mainnav .snav').forEach(t=>t.onclick=()=>{
   mode = t.dataset.m;
   document.querySelectorAll('#mainnav .snav').forEach(x=>x.classList.toggle('on', x===t));
-  $('#stockpane').style.display = mode==='stock' ? 'block' : 'none';
+  $('#stockpane').style.display = mode==='stock' ? 'flex' : 'none';
   $('#boards').style.display = mode==='boards' ? 'block' : 'none';
   $('#indices').style.display = mode==='indices' ? 'block' : 'none';
   if(mode==='boards' && !snap[sk()]) loadBoards();
