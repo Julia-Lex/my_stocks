@@ -9,9 +9,9 @@
 CREATE TABLE IF NOT EXISTS fin_forecast (
     stock_code    VARCHAR(12)  NOT NULL,
     report_date   DATE         NOT NULL,
-    forecast_type VARCHAR(32)  NOT NULL,       -- 预测指标(如 归母净利润/扣非净利润)
+    forecast_type VARCHAR(64)  NOT NULL,       -- 预测指标(部分值超32字符)(如 归母净利润/扣非净利润)
     ann_date      DATE,                        -- 公告日期
-    change_desc   VARCHAR(32),                 -- 业绩变动(预增/预减/扭亏...)
+    change_desc   TEXT,                        -- 业绩变动(整句描述,实测最长109+字符)(预增/预减/扭亏...)
     forecast_value NUMERIC(20,2),              -- 预测数值(区间/定性预告可为 NULL)
     change_pct    NUMERIC(12,4),               -- 业绩变动幅度 %
     reason        TEXT,                        -- 变动原因
