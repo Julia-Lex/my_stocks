@@ -369,19 +369,38 @@ from pydantic import BaseModel  # noqa: E402
 class WatchItem(BaseModel):
     market: Literal["cn", "hk", "us"]
     code: str
+    grp: str = "默认分组"
+
+
+class WatchGroup(BaseModel):
+    name: str
+
+
+class WatchOrderItem(BaseModel):
+    market: Literal["cn", "hk", "us"]
+    code: str
+
+
+class WatchOrderGroup(BaseModel):
+    name: str
+    items: list[WatchOrderItem]
+
+
+class WatchOrder(BaseModel):
+    groups: list[WatchOrderGroup]
 
 
 @app.get("/api/watchlist")
 def watchlist_get():
-    """自选股列表,带名称与最新收盘/涨跌幅(按各市场日线表最新一日)。"""
+    """自选股(按分组),带名称与最新收盘/涨跌幅。空分组也返回(供拖入)。"""
     conn = get_conn()
-    items = []
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT market, stock_code, added_at FROM watchlist "
-                        "ORDER BY added_at")
-            rows = cur.fetchall()
-            for market, code, _ in rows:
+            cur.execute("SELECT name FROM watchlist_group ORDER BY sort_order, name")
+            groups = {r[0]: [] for r in cur.fetchall()}
+            cur.execute("SELECT market, stock_code, grp FROM watchlist "
+                        "ORDER BY sort_order, added_at")
+            for market, code, grp in cur.fetchall():
                 cfg, qt = MARKETS[market], _QUOTE_TABLES[market]
                 cur.execute(
                     f"SELECT {cfg['name_expr']} FROM {cfg['basic']} WHERE stock_code = %s",
@@ -391,13 +410,14 @@ def watchlist_get():
                     f"SELECT close, pct_chg FROM {qt['price']} "
                     f"WHERE stock_code = %s ORDER BY trade_date DESC LIMIT 1", (code,))
                 pr = cur.fetchone()
-                items.append({"market": market, "code": code,
-                              "name": nr[0] if nr else code,
-                              "close": float(pr[0]) if pr and pr[0] is not None else None,
-                              "pct_chg": float(pr[1]) if pr and pr[1] is not None else None})
+                groups.setdefault(grp, []).append(
+                    {"market": market, "code": code,
+                     "name": nr[0] if nr else code,
+                     "close": float(pr[0]) if pr and pr[0] is not None else None,
+                     "pct_chg": float(pr[1]) if pr and pr[1] is not None else None})
     finally:
         conn.close()
-    return {"items": items}
+    return {"groups": [{"name": g, "items": items} for g, items in groups.items()]}
 
 
 @app.post("/api/watchlist")
@@ -405,8 +425,67 @@ def watchlist_add(item: WatchItem):
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("INSERT INTO watchlist (market, stock_code) VALUES (%s, %s) "
-                        "ON CONFLICT DO NOTHING", (item.market, item.code[:16]))
+            cur.execute("INSERT INTO watchlist_group (name, sort_order) "
+                        "VALUES (%s, 999) ON CONFLICT DO NOTHING", (item.grp[:32],))
+            cur.execute("SELECT coalesce(max(sort_order), 0) + 1 FROM watchlist WHERE grp = %s",
+                        (item.grp[:32],))
+            nxt = cur.fetchone()[0]
+            cur.execute("INSERT INTO watchlist (market, stock_code, grp, sort_order) "
+                        "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                        (item.market, item.code[:16], item.grp[:32], nxt))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.post("/api/watchlist/groups")
+def watchlist_group_add(g: WatchGroup):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT coalesce(max(sort_order), 0) + 1 FROM watchlist_group")
+            cur.execute("INSERT INTO watchlist_group (name, sort_order) "
+                        "SELECT %s, coalesce(max(sort_order), 0) + 1 FROM watchlist_group "
+                        "ON CONFLICT DO NOTHING", (g.name[:32],))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.delete("/api/watchlist/groups/{name}")
+def watchlist_group_del(name: str):
+    if name == "默认分组":
+        raise HTTPException(status_code=422, detail="默认分组不可删除")
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            # 成员并入默认分组(排到末尾)
+            cur.execute("SELECT coalesce(max(sort_order), 0) FROM watchlist WHERE grp = '默认分组'")
+            base = cur.fetchone()[0]
+            cur.execute("UPDATE watchlist SET grp = '默认分组', sort_order = sort_order + %s "
+                        "WHERE grp = %s", (base + 1000, name))
+            cur.execute("DELETE FROM watchlist_group WHERE name = %s", (name,))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.put("/api/watchlist/order")
+def watchlist_order(order: WatchOrder):
+    """拖拽后的批量重排:按前端给出的分组顺序与组内顺序整体重写。"""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            for gi, g in enumerate(order.groups):
+                cur.execute("UPDATE watchlist_group SET sort_order = %s WHERE name = %s",
+                            (gi, g.name[:32]))
+                for si, it in enumerate(g.items):
+                    cur.execute("UPDATE watchlist SET grp = %s, sort_order = %s "
+                                "WHERE market = %s AND stock_code = %s",
+                                (g.name[:32], si, it.market, it.code))
         conn.commit()
     finally:
         conn.close()

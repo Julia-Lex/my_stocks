@@ -212,24 +212,69 @@ def test_kline_bad_period():
     assert r.status_code == 422
 
 
+def _wl_all_items(d):
+    return [i for g in d["groups"] for i in g["items"]]
+
+
 def test_watchlist_crud():
-    """自选股:增删查,列表带名称与最新涨跌幅。"""
+    """自选股:增删查(分组结构),列表带名称与最新涨跌幅。"""
     # 清理可能的残留
     client.delete("/api/watchlist/cn/300308.SZ")
     r = client.post("/api/watchlist", json={"market": "cn", "code": "300308.SZ"})
     assert r.status_code == 200
     r = client.post("/api/watchlist", json={"market": "cn", "code": "300308.SZ"})
     assert r.status_code == 200                     # 重复添加幂等
-    items = client.get("/api/watchlist").json()["items"]
-    hit = next(i for i in items if i["code"] == "300308.SZ")
+    d = client.get("/api/watchlist").json()
+    assert d["groups"][0]["name"]                   # 至少有默认分组
+    hit = next(i for i in _wl_all_items(d) if i["code"] == "300308.SZ")
     assert hit["name"] == "中际旭创" and hit["market"] == "cn"
     assert hit["close"] and hit["pct_chg"] is not None
     assert client.delete("/api/watchlist/cn/300308.SZ").status_code == 200
-    items = client.get("/api/watchlist").json()["items"]
-    assert all(i["code"] != "300308.SZ" for i in items)
+    d = client.get("/api/watchlist").json()
+    assert all(i["code"] != "300308.SZ" for i in _wl_all_items(d))
     # 非法市场
     assert client.post("/api/watchlist",
                        json={"market": "xx", "code": "1"}).status_code == 422
+
+
+def test_watchlist_groups_and_order():
+    """分组增删与拖拽排序(order 批量重排,含跨组移动)。"""
+    # 准备:清残留,建组,加两只
+    client.delete("/api/watchlist/cn/300308.SZ")
+    client.delete("/api/watchlist/cn/300476.SZ")
+    client.delete("/api/watchlist/groups/测试组")
+    assert client.post("/api/watchlist/groups", json={"name": "测试组"}).status_code == 200
+    assert client.post("/api/watchlist/groups", json={"name": "测试组"}).status_code == 200  # 幂等
+    client.post("/api/watchlist", json={"market": "cn", "code": "300308.SZ", "grp": "测试组"})
+    client.post("/api/watchlist", json={"market": "cn", "code": "300476.SZ", "grp": "测试组"})
+    d = client.get("/api/watchlist").json()
+    g = next(x for x in d["groups"] if x["name"] == "测试组")
+    assert [i["code"] for i in g["items"]] == ["300308.SZ", "300476.SZ"]
+    # 重排:交换顺序
+    r = client.put("/api/watchlist/order", json={"groups": [
+        {"name": "测试组", "items": [{"market": "cn", "code": "300476.SZ"},
+                                     {"market": "cn", "code": "300308.SZ"}]}]})
+    assert r.status_code == 200
+    d = client.get("/api/watchlist").json()
+    g = next(x for x in d["groups"] if x["name"] == "测试组")
+    assert [i["code"] for i in g["items"]] == ["300476.SZ", "300308.SZ"]
+    # 跨组:把 300308 挪到默认分组
+    client.put("/api/watchlist/order", json={"groups": [
+        {"name": "默认分组", "items": [{"market": "cn", "code": "300308.SZ"}]},
+        {"name": "测试组", "items": [{"market": "cn", "code": "300476.SZ"}]}]})
+    d = client.get("/api/watchlist").json()
+    default = next(x for x in d["groups"] if x["name"] == "默认分组")
+    assert any(i["code"] == "300308.SZ" for i in default["items"])
+    # 删组:成员并入默认分组;默认分组不可删
+    assert client.delete("/api/watchlist/groups/测试组").status_code == 200
+    d = client.get("/api/watchlist").json()
+    assert all(x["name"] != "测试组" for x in d["groups"])
+    default = next(x for x in d["groups"] if x["name"] == "默认分组")
+    assert any(i["code"] == "300476.SZ" for i in default["items"])
+    assert client.delete("/api/watchlist/groups/默认分组").status_code == 422
+    # 清理
+    client.delete("/api/watchlist/cn/300308.SZ")
+    client.delete("/api/watchlist/cn/300476.SZ")
 
 
 def test_index_kline():
