@@ -210,3 +210,77 @@ def test_kline_bad_period():
     r = client.get("/api/kline", params={"market": "cn", "code": "300308.SZ",
                                          "period": "hour"})
     assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# A股板块
+# ---------------------------------------------------------------------------
+
+def _first_industry_code():
+    r = client.get("/api/boards/snapshot", params={"btype": "industry"})
+    return r.json()["items"][0]["code"]
+
+
+def test_boards_snapshot():
+    r = client.get("/api/boards/snapshot", params={"btype": "industry"})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["date"] >= "2026-07-10"
+    assert len(d["items"]) > 100          # 131 个行业板块基本都有当日数据
+    it = d["items"][0]
+    assert it["code"] and it["name"] and it["pct_chg"] is not None
+    assert it["amount"] > 0
+    # 按涨跌幅降序
+    pcts = [i["pct_chg"] for i in d["items"] if i["pct_chg"] is not None]
+    assert pcts == sorted(pcts, reverse=True)
+
+
+def test_boards_snapshot_bad_type():
+    r = client.get("/api/boards/snapshot", params={"btype": "sector"})
+    assert r.status_code == 422
+
+
+def test_boards_calendar():
+    r = client.get("/api/boards/calendar", params={"btype": "industry", "days": 20})
+    assert r.status_code == 200
+    d = r.json()
+    assert len(d["dates"]) == 20
+    assert d["dates"] == sorted(d["dates"])
+    assert len(d["rows"]) > 100
+    assert all(len(row["values"]) == 20 for row in d["rows"][:5])
+
+
+def test_boards_kline():
+    from datetime import date as _date
+    code = _first_industry_code()
+    r = client.get("/api/boards/kline", params={"code": code, "days": 250})
+    assert r.status_code == 200
+    bars = r.json()["bars"]
+    assert len(bars) == 250
+    assert bars == sorted(bars, key=lambda b: b["d"])
+    # 周线聚合:每根一个自然周
+    rw = client.get("/api/boards/kline", params={"code": code, "days": 100, "period": "week"})
+    wbars = rw.json()["bars"]
+    keys = [_date.fromisoformat(b["d"]).isocalendar()[:2] for b in wbars]
+    assert len(keys) == len(set(keys)) and len(wbars) > 50
+
+
+def test_boards_members():
+    code = _first_industry_code()
+    r = client.get("/api/boards/members", params={"code": code})
+    assert r.status_code == 200
+    d = r.json()
+    assert len(d["items"]) >= 3
+    it = d["items"][0]
+    assert it["code"] and it["name"]
+
+
+def test_boards_compare():
+    r0 = client.get("/api/boards/snapshot", params={"btype": "industry"})
+    codes = [i["code"] for i in r0.json()["items"][:2]]
+    r = client.get("/api/boards/compare", params={"codes": ",".join(codes), "days": 120})
+    assert r.status_code == 200
+    series = r.json()["series"]
+    assert len(series) == 2
+    for s in series:
+        assert s["name"] and len(s["dates"]) == len(s["closes"]) > 100
