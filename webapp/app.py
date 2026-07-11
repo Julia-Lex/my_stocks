@@ -506,6 +506,75 @@ def watchlist_del(market: Literal["cn", "hk", "us"], code: str):
 
 
 # ---------------------------------------------------------------------------
+# 待办事项(webapp 应用数据:分析想法清单)
+# ---------------------------------------------------------------------------
+class TodoNew(BaseModel):
+    content: str
+
+
+class TodoPatch(BaseModel):
+    done: bool
+
+
+@app.get("/api/todos")
+def todos_get():
+    """未完成在前(新→旧),已完成沉底(完成时间新→旧)。"""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, content, done, created_at, done_at FROM todo "
+                        "ORDER BY done, CASE WHEN done THEN done_at END DESC, created_at DESC")
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    return {"items": [{"id": r[0], "content": r[1], "done": r[2],
+                       "created_at": r[3].isoformat()[:16].replace("T", " "),
+                       "done_at": r[4].isoformat()[:16].replace("T", " ") if r[4] else None}
+                      for r in rows]}
+
+
+@app.post("/api/todos")
+def todos_add(t: TodoNew):
+    content = t.content.strip()
+    if not content:
+        raise HTTPException(status_code=422, detail="内容不能为空")
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO todo (content) VALUES (%s) RETURNING id", (content[:500],))
+            tid = cur.fetchone()[0]
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, "id": tid}
+
+
+@app.patch("/api/todos/{tid}")
+def todos_patch(tid: int, p: TodoPatch):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE todo SET done = %s, done_at = CASE WHEN %s THEN now() END "
+                        "WHERE id = %s", (p.done, p.done, tid))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.delete("/api/todos/{tid}")
+def todos_del(tid: int):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM todo WHERE id = %s", (tid,))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
 # 市场指数
 # ---------------------------------------------------------------------------
 _INDEX_TABLES = {

@@ -114,6 +114,23 @@
   .wl-glist.drop-in { background:#f0f4ff; border-radius:8px; }
   .wl-addgrp { color:var(--accent); font-size:12.5px; cursor:pointer; padding:8px 6px 2px; }
   .ixchart { width:100%; height:340px; display:block; cursor:crosshair; }
+  /* 待办事项 */
+  #todos { display:none; max-width:720px; }
+  .todo-add { display:flex; gap:8px; margin-bottom:14px; }
+  #todoinput { flex:1; padding:10px 14px; font-size:14.5px; border:1px solid var(--border);
+               border-radius:10px; outline:none; }
+  #todoinput:focus { border-color:var(--accent); }
+  #todobtn { padding:0 22px; border:none; border-radius:10px; background:var(--accent);
+             color:#fff; font-size:14px; cursor:pointer; }
+  .todo-item { display:flex; align-items:flex-start; gap:10px; background:#fff;
+               border:1px solid var(--border); border-radius:10px; padding:11px 14px;
+               margin-bottom:8px; }
+  .todo-item input[type=checkbox] { margin-top:3px; accent-color:var(--accent); cursor:pointer; }
+  .todo-item .tc { flex:1; font-size:14px; line-height:1.5; word-break:break-word; }
+  .todo-item .tt { color:var(--muted); font-size:11.5px; margin-top:2px; }
+  .todo-item.done .tc { color:var(--muted); text-decoration:line-through; }
+  .todo-item .del { color:var(--muted); cursor:pointer; visibility:hidden; padding:0 2px; }
+  .todo-item:hover .del { visibility:visible; }
   .ktip { position:absolute; display:none; pointer-events:none; background:rgba(20,20,20,.85);
           color:#fff; font-size:12px; padding:6px 9px; border-radius:8px; z-index:5;
           white-space:nowrap; line-height:1.6; }
@@ -149,6 +166,7 @@
     <span class="snav on" data-m="stock">个股信息</span>
     <span class="snav" data-m="boards">板块信息</span>
     <span class="snav" data-m="indices">市场指数</span>
+    <span class="snav" data-m="todos">待办事项</span>
   </nav>
 </aside>
 <div class="wrap">
@@ -165,6 +183,14 @@
       </div>
       <div id="content"></div>
     </div>
+  </div>
+  <div id="todos">
+    <div class="sec">分析待办 <span class="note-inline">记录后续要做的分析,回车或点添加</span></div>
+    <div class="todo-add">
+      <input id="todoinput" placeholder="例:对比光模块三家的毛利率走势 / 自选股组合近一年相对沪深300的超额收益" maxlength="500">
+      <button id="todobtn">添加</button>
+    </div>
+    <div id="todolist"></div>
   </div>
   <div id="indices">
     <div class="sec">A股 <span class="ptabs" id="ixp-cn"></span>
@@ -716,9 +742,50 @@ document.querySelectorAll('#mainnav .snav').forEach(t=>t.onclick=()=>{
   $('#stockpane').style.display = mode==='stock' ? 'flex' : 'none';
   $('#boards').style.display = mode==='boards' ? 'block' : 'none';
   $('#indices').style.display = mode==='indices' ? 'block' : 'none';
+  $('#todos').style.display = mode==='todos' ? 'block' : 'none';
   if(mode==='boards' && !snap[sk()]) loadBoards();
   if(mode==='indices') loadIndices();
+  if(mode==='todos') loadTodos();
 });
+
+/* ================== 待办事项 ================== */
+async function loadTodos(){
+  try{
+    const r = await fetch('/api/todos');
+    if(!r.ok) throw new Error('待办加载失败 HTTP '+r.status);
+    renderTodos((await r.json()).items);
+  }catch(ex){ err(ex.message); }
+}
+function renderTodos(items){
+  $('#todolist').innerHTML = items.length ? items.map(t=>`
+    <div class="todo-item${t.done?' done':''}" data-id="${t.id}">
+      <input type="checkbox" ${t.done?'checked':''}>
+      <div class="tc">${t.content.replace(/</g,'&lt;')}
+        <div class="tt">${t.done ? '完成于 '+t.done_at : '创建于 '+t.created_at}</div></div>
+      <span class="del" title="删除">✕</span>
+    </div>`).join('')
+    : '<div class="note">暂无待办。把想做的分析记在这里,做完勾掉。</div>';
+  document.querySelectorAll('.todo-item input[type=checkbox]').forEach(cb=>cb.onchange = async e=>{
+    const id = e.target.closest('.todo-item').dataset.id;
+    await fetch(`/api/todos/${id}`, {method:'PATCH',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({done: e.target.checked})});
+    loadTodos();
+  });
+  document.querySelectorAll('.todo-item .del').forEach(el=>el.onclick = async ()=>{
+    await fetch(`/api/todos/${el.closest('.todo-item').dataset.id}`, {method:'DELETE'});
+    loadTodos();
+  });
+}
+async function addTodo(){
+  const v = $('#todoinput').value.trim();
+  if(!v) return;
+  await fetch('/api/todos', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify({content: v})});
+  $('#todoinput').value = '';
+  loadTodos();
+}
+$('#todobtn').onclick = addTodo;
+$('#todoinput').addEventListener('keydown', e=>{ if(e.key==='Enter') addTodo(); });
 document.querySelectorAll('input[name=btype]').forEach(rd=>rd.onchange=()=>{ btype=rd.value; loadBoards(); });
 document.querySelectorAll('input[name=bmarket]').forEach(rd=>rd.onchange=()=>{
   bmarket=rd.value;
