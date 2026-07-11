@@ -209,6 +209,179 @@ SELECT f.stock_code, b.name, f.report_date, f.ann_date, f.total_assets
 
 (cron 的实际安装由控制者在验收时执行,README 只记录。)
 
+## 港股 / 美股基本面(三期)
+
+设计:`docs/superpowers/specs/2026-07-10-hkus-fundamental-design.md`。**富途 OpenAPI 主源**
+(`get_financials_statements`,历史深达港股 2001/美股 1979)+ 东财备源与美股公告日源。
+本期裁定只做两层(报表 + 指标),无股本/估值层(免费源短板,备档待启)。
+
+| 表 | 内容 | 覆盖 |
+| --- | --- | --- |
+| `hk_/us_fin_statement` | 三大报表全科目 JSONB(`{科目名: 金额}`)+ `currency` | 近 10 年,累计/年度口径 |
+| `hk_/us_fin_indicator` | EPS/BPS/ROE/毛利率/负债率等 14 指标宽表 + `ann_date` | 同上 |
+| `hk_/us_fin_asof(股, 日期)` / `*_fin_asof_all(日期)` | 防未来函数取数入口 | 只认非 NULL `ann_date` |
+
+```sql
+-- 美股 as-of:2026-06-20 时点可见的 ADBE 最新报告期(实测返回 2026-05-28 期,公告日 06-15)
+SELECT report_date, ann_date, eps, roe FROM us_fin_asof('ADBE.US', '2026-06-20');
+
+-- 港股指标直查(注意:港股无 as-of,见下方限制 1)
+SELECT report_date, currency, eps, roe, debt_ratio
+FROM hk_fin_indicator WHERE stock_code = '00001.HK' ORDER BY report_date DESC LIMIT 3;
+```
+
+### FutuOpenD 运维(硬依赖)
+
+初始化与增量都要求 **FutuOpenD 网关常驻并已登录**(127.0.0.1:11111)。网关不可达时脚本
+明确报错退出(提示"请启动 FutuOpenD"),不静默降级;重启网关后重跑即断点续传。富途限频
+30 次/30 秒,代码内置全局 1.05 秒节流(`ASTOCK_FUTU_MIN_INTERVAL` 可调)。
+
+```bash
+python 12_init_fundamental_intl.py --market us --workers 2   # 美股全量 ~1.2h
+python 12_init_fundamental_intl.py --market hk --workers 2   # 港股全量 ~6h(过夜)
+python 13_fundamental_update_intl.py --market hk             # 增量(7 天门控,平日秒退)
+```
+
+### 已知限制
+
+1. **港股 `ann_date` 不可得 → 港股 as-of 防未来函数不可用**:东财/富途的免费口径都不提供
+   港股财报披露日(三级探测全部落空,见 spec)。`hk_fin_asof(_all)` 对港股永远返回空;
+   回测请勿直接使用港股基本面因子,或自行按披露惯例(年报 3 月底/中报 8 月底)加保守滞后。
+2. **美股 `ann_date` 护栏收紧至 200 天,历史覆盖率因此下降(宁缺勿假)**:东财"累计季报"/
+   "年报"接口的 NOTICE_DATE 对老报告期存在系统性"被下一次同类披露覆盖"缺陷 —— 最终审查
+   在全量入库数据上复核发现,旧的 `>400 天滞后` 护栏几乎不设防:已入库 `ann_date` 非空行里
+   78% 恰好落在 380-401 天这个窄带,而美股 10-K/10-Q 法定披露滞后上限仅 ≤90 天,该窄带
+   与真实披露窗口完全不重叠,确证是假滞后而非真实晚披露。护栏已收紧为 `>200 天` 剔除
+   (仍偏保守,不保证拦住 200-380 天之间可能存在的更隐蔽假值);存量污染数据已清洗
+   (`ann_date - report_date > 200` 的历史行全部置回 NULL,再用新护栏全量重跑阶段B 回填);
+   US 两表清洗+重跑前后 ann_date 非空行数:`us_fin_indicator` 6582 → 1427,
+   `us_fin_statement` 19678 → 4244。净效果:US as-of 历史截面现在只含可证真实的公告日,
+   覆盖率显著低于清洗前
+   ——这是主动取舍而非退步,清洗前的"高覆盖率"里含有大量假公告日,若拿来做 as-of 防未来
+   过滤,反而会让本应不可见的旧报告期提前"可见",构成真实的未来函数风险。财季末日期与
+   东财差 ±1 天,按(年,月)容差匹配(ADBE 等非日历财年已实测)。美股 Q1 单季公告日为
+   已知覆盖缺口(NULL)。
+3. 美股指标中 `bps`/`ocf_ps` 恒 NULL(富途 type4 与东财美股接口均无此科目);其余
+   12 列由富途 + 东财互补填充。
+4. `currency` 如实存不换算:部分港股财报以 CNY 计价(如腾讯),跨币种比较自行处理。
+
+```cron
+# 单进程串行链式(&&):hk/us 共享同一富途节流是进程级(ASTOCK_FUTU_MIN_INTERVAL 全局
+# 变量作用于单个 Python 进程内),两个独立 cron 触发点各自起进程互不知晓对方节流状态,
+# 理论上可并发抢占富途连接触发限频;链式合并为一行后 hk 跑完(平日秒退)才起 us 进程,
+# 天然共享节流不会重叠请求。
+50 18 * * 1-5  cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu ASTOCK_DB_PASSWORD='xxx' .venv/bin/python 13_fundamental_update_intl.py --market hk >> update_fund_hk.log 2>&1 && ASTOCK_DB_USER=zhu ASTOCK_DB_PASSWORD='xxx' .venv/bin/python 13_fundamental_update_intl.py --market us >> update_fund_us.log 2>&1
+```
+
+## 事件数据(C 补全包)
+
+设计:`docs/superpowers/specs/2026-07-11-events-pack-design.md`。四表 + 改码治理:
+
+| 表 | 内容 | 防未来 |
+| --- | --- | --- |
+| `fin_forecast` | 业绩预告(预测指标/变动幅度/原因,2015Q4 起) | `ann_date`,**比正式财报早数周**(实测中际旭创早 59 天) |
+| `fin_express` | 业绩快报(营收/净利/EPS 等,2015Q4 起) | `ann_date` |
+| `lhb_detail` | 龙虎榜明细(2016 起,同日同股可多原因上榜) | 榜单本身即当日事件 |
+| `nb_hold` | 北向个股持股序列(数量/市值/占比)——**历史数据集:2017~2024-08**(港交所披露改制后序列终结) | 日频(已终结) |
+| `stock_alias` | 改码股映射(如 BGNE→ONC):**新码拉数、旧码入库**保历史连续 | — |
+
+```sql
+-- 预告领先性:同一报告期,预告公告日比正式财报公告日早多少天(实测可跑)
+SELECT f.ann_date AS forecast_ann, i.ann_date AS report_ann,
+       (i.ann_date - f.ann_date) AS lead_days
+FROM fin_forecast f JOIN fin_indicator i USING (stock_code, report_date)
+WHERE f.stock_code = '300308.SZ' AND f.ann_date IS NOT NULL AND i.ann_date IS NOT NULL
+ORDER BY f.report_date DESC LIMIT 3;
+```
+
+```bash
+psql -d astock -f 14_schema_events.sql
+ASTOCK_DB_USER=zhu .venv/bin/python 14_init_events.py --part all   # 预告/快报分钟级;lhb ~1h;nb ~1.5h
+ASTOCK_DB_USER=zhu .venv/bin/python 15_events_update.py            # 每日:lhb 近5日 + 披露季核查
+```
+
+已知限制:预告数值为区间/定性混合(`forecast_value` 可 NULL,完整语义看 `change_desc`);北向为历史持股序列,**止于 2024-08-16**(披露改制,序列终结;15 默认跳过,--with-nb 可探针);龙虎榜披露规则 2017 有修订,跨期统计注意口径;`stock_alias` 人工维护,15 脚本周报提示疑似改码股。
+
+```cron
+0 19 * * 1-5  cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu ASTOCK_DB_PASSWORD='xxx' .venv/bin/python 15_events_update.py >> update_events.log 2>&1
+```
+
+## 港美指数成分(区间表)
+
+`index_member`:HSI(93)/HSTECH(30)/HSCEI(50)富途快照 + 每日 diff;**SPX 含 1996 起真实历史区间**(1,255 段,TSLA 2020-12-21 纳入实证);NDX 现势(Wikipedia,源偶发超时次日自愈)。
+
+```sql
+-- 防偷看:任意历史日的指数成分
+SELECT stock_code FROM index_member
+WHERE index_code='SPX' AND in_date <= '2019-06-01' AND (out_date IS NULL OR out_date > '2019-06-01');
+```
+
+限制:恒指族历史成分免费不可得——`note='snapshot-open'` 行的 in_date 是**建档日**非真实纳入日,从建档起 diff 累积;A股成分见板块数据层(另建)。
+
+## 港美板块(富途源,每市场分表)
+
+`hk_board`/`us_board`(231/262 个,行业+概念)+ `hk_board_member`/`us_board_member`(成分区间,5,066/8,362 条在册)。A 股板块见上一章(东财体系,独立建设)。
+
+```sql
+-- 个股反查(实测:腾讯 → 数码解决方案服务/腾讯概念/人工智能...)
+SELECT b.board_name, b.board_type FROM hk_board_member m
+JOIN hk_board b USING (board_code)
+WHERE m.stock_code = '00700.HK' AND m.out_date IS NULL;
+```
+
+限制:富途无板块历史成分——`note='snapshot-open'` 的 in_date 是建档日(2026-07-11),此后每日 diff 累积真实变更;`get_plate_stock` 有独立限频(10 次/30 秒),脚本已按 3.2s 节流。
+
+## 板块数据(行业/概念,支持板块轮动)
+
+设计:`docs/superpowers/specs/2026-07-10-board-rotation-design.md`。东财体系,
+行业 ~86 个 + 概念 ~450 个;全部为行情族(push2/push2his)接口,与个股日线共享限流预算。
+
+### 四表速查
+
+| 表 | 内容 | 主键 |
+|---|---|---|
+| `board` | 板块字典(代码/名称/类型/是否在市) | board_code |
+| `board_member` | 成分**区间表**(valid_from/valid_to) | (board_code, stock_code, valid_from) |
+| `board_daily` | 板块指数日线(行业历史约到 2006;volume 单位股) | (board_code, trade_date) |
+| `board_fund_flow` | 板块资金流(主力/超大/大/中/小单净额与占比,元) | (board_code, trade_date) |
+
+### 初始化与增量
+
+```bash
+psql -U zhu -d astock -f 11_schema_board.sql
+ASTOCK_DB_USER=zhu .venv/bin/python 12_init_board.py --workers 3   # 全量,断点续传
+ASTOCK_DB_USER=zhu .venv/bin/python 13_board_update.py             # 每日增量
+```
+
+### 成分区间表用法
+
+```sql
+-- 某日 d 某板块的成分(as-of)
+SELECT stock_code FROM board_member
+WHERE board_code = 'BK0475' AND valid_from <= :d AND (valid_to IS NULL OR valid_to > :d);
+
+-- 某股当前所属全部板块
+SELECT b.board_type, b.board_name FROM board_member m JOIN board b USING (board_code)
+WHERE m.stock_code = '600519.SH' AND m.valid_to IS NULL;
+```
+
+### 已知限制
+
+1. **成分历史 = 观测历史**:东财只提供当前成分快照,`valid_from` 是本库首次观测到
+   纳入的日期(首次建库日的存量成分尤其如此),不是真实纳入日;停跑期间的变动归到
+   下一次观测日。
+2. **概念板块会生灭**:从东财列表消失的板块 `is_active=false`,历史数据保留;
+   回测跨板块生命周期时注意用 `is_active` 或数据实际日期范围过滤。
+3. **资金流历史深度依源**:`lmt=0` 拉全东财可用历史,各板块起点不一。
+4. 板块指数无复权概念,`board_daily` 即原始点位;板块内**无权重数据**(东财不提供),
+   需要加权口径时用成分股流通市值自行近似。
+
+### 每日定时(cron 示例,合并主分支后安装)
+
+```cron
+10 18 * * 1-5  cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 13_board_update.py >> update_board.log 2>&1
+```
+
 ## 后续(第二期)
 
 - 数据量大后可加 TimescaleDB 扩展 / 迁移到独立主机(当前无损可迁)。

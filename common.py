@@ -1468,3 +1468,650 @@ def fetch_valuation(symbol: str) -> pd.DataFrame:
             df[col] = pd.NA
     keep = ["trade_date", "pe", "pe_ttm", "pb", "ps", "ps_ttm", "dv_ratio", "total_mv"]
     return df[keep].dropna(subset=["trade_date"])
+
+
+# ===========================================================================
+# 基本面·港美(三期)。设计: docs/superpowers/specs/2026-07-10-hkus-fundamental-design.md
+# 富途(FutuOpenD 网关)主源 + 东财 ann_date 提供者。两层架构(报表 JSONB + 指标
+# 宽表)镜像二期,ann_date 宁缺勿假 —— 拿不到就 NULL,绝不用报告期估算冒充。
+# ===========================================================================
+INTL_FUND_SOURCE = os.getenv("ASTOCK_INTL_FUND_SOURCE", "futu")
+
+_futu_ctx = None
+_futu_lock = threading.Lock()
+_futu_last_req = [0.0]
+FUTU_MIN_INTERVAL = float(os.getenv("ASTOCK_FUTU_MIN_INTERVAL", "1.05"))
+
+
+def _futu_context():
+    """懒建常驻富途连接;网关不可达时给出可操作报错。"""
+    global _futu_ctx
+    with _futu_lock:
+        if _futu_ctx is None:
+            try:
+                from futu import OpenQuoteContext
+                _futu_ctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+            except Exception as exc:
+                raise ConnectionError(
+                    "无法连接 FutuOpenD 网关(127.0.0.1:11111)。"
+                    "请启动 FutuOpenD 并登录后重试。原始错误: %s" % exc) from exc
+        return _futu_ctx
+
+
+def _futu_call(fn_name, *args, **kwargs):
+    """全局节流的富途调用:任意两次请求间隔 >= FUTU_MIN_INTERVAL;ret!=0 抛异常。"""
+    ctx = _futu_context()
+    with _futu_lock:
+        wait = FUTU_MIN_INTERVAL - (time.monotonic() - _futu_last_req[0])
+        if wait > 0:
+            time.sleep(wait)
+        _futu_last_req[0] = time.monotonic()
+    ret, data = getattr(ctx, fn_name)(*args, **kwargs)
+    if ret != 0:
+        raise RuntimeError(f"futu {fn_name} ret={ret}: {data}")
+    return data
+
+
+def close_futu() -> None:
+    """进程收尾关闭富途连接(幂等:未建立过连接或已关闭时安全空操作)。"""
+    global _futu_ctx
+    with _futu_lock:
+        if _futu_ctx is not None:
+            try:
+                _futu_ctx.close()
+            except Exception:  # noqa: BLE001
+                pass
+            _futu_ctx = None
+
+
+def futu_code(stock_code: str) -> str:
+    """'00700.HK' -> 'HK.00700';'AAPL.US' -> 'US.AAPL'。纯函数,无网络调用。
+
+    用 rpartition 从右切后缀:美股点号股(BRK.B.US)的 symbol 本身含点,
+    左切会拆成 'B.US.BRK' 垃圾码(2026-07-11 全量实跑发现,富途报 format of code)。
+    """
+    symbol, _, suffix = stock_code.strip().rpartition(".")
+    return f"{suffix.upper()}.{symbol}"
+
+
+_FUTU_STMT_TYPE = {"income": 1, "balance": 2, "cashflow": 3}
+_FUTU_INDICATOR_TYPE = 4
+
+
+def _futu_fetch_reports(code: str, stype: int) -> list[dict]:
+    """分页拉 report_list,翻到整页 report_date 都早于 FUND_START 即停。"""
+    out, nk = [], None
+    while True:
+        d = _futu_call("get_financials_statements", code,
+                       statement_type=stype, num=50, next_key=nk)
+        rl = d.get("report_list", [])
+        out.extend(rl)
+        nk = d.get("next_key")
+        if not nk or not rl:
+            break
+        oldest = min(r["date_time_str"] for r in rl)
+        if oldest < FUND_START.isoformat():
+            break
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Step 1b 探测结论(00700.HK / AAPL.US 全历史响应实测,2026-07-10,见 task-2-report):
+# financial_type 枚举 —— 1=Q1(单季即累计首季)/2=Q2(H1 累计)/3=Q3(9 个月累计)/
+# 4=Q4(单季度,非累计)/7=FY(全年累计)。income(利润表)同一 report_date 会同时出现
+# financial_type=7(FY)与 4(Q4)两行;balance(资产负债表)两者逐项数值相同(同一期末
+# 快照,只是打了两个标签);cashflow(现金流量表)两者数值明显不同 —— 已实测
+# AAPL 2025-09-26:经营活动现金流量净额 FY=1,114.82 亿 vs Q4(单季)=297.28 亿,
+# 差 3.75 倍,证实 Q4 行确是"仅第四季度净额"而非累计口径。
+# **入库规则:只保留累计/年度口径 —— financial_type ∈ {1,2,3,7},剔除单季 Q4(=4)**,
+# 与 A 股"累计报表"惯例一致;这条规则同时天然消除了同一 report_date 两行撞主键的问题
+# (HK 00700 的 balance/cashflow 源本身全历史只出现过 1/7 两档,不受影响;
+# US AAPL 的三张报表均全量出现过 1/2/3/4/7 五档,规则对三表通用)。
+# ---------------------------------------------------------------------------
+_FUTU_CUMULATIVE_TYPES = {1, 2, 3, 7}
+_FUTU_PERIOD_KIND = {1: "Q1", 2: "H1", 3: "9M", 7: "FY"}
+
+
+def _futu_currency(r: dict) -> str | None:
+    """富途 currency_code 取值 guard:空串/None → None(原逻辑);float NaN 也需挡下 ——
+    `or None` 对 NaN 不生效(float NaN 是 truthy),NaN 会被 psycopg2 适配成 SQL 字面量
+    'NaN' 写进 VARCHAR(8) currency 列,产生看起来像字符串"NaN"的脏数据(2026-07-11 最终
+    审查在 us_fin_indicator/us_fin_statement 实测发现,已清洗存量,此处补根因 guard)。
+    """
+    v = r.get("currency_code")
+    if isinstance(v, float) and pd.isna(v):
+        return None
+    return v or None
+
+
+def _futu_reports_to_df(report_list: list[dict]) -> pd.DataFrame:
+    """report_list -> DataFrame[report_date, currency, period_kind, data(dict)]。
+
+    按 _FUTU_CUMULATIVE_TYPES 过滤单季 Q4 + FUND_START 过滤;item_list 的节标题行
+    (无 data 字段,futu SDK 里此时 dict 干脆没有 "data" 键)跳过。
+    """
+    rows = []
+    for r in report_list:
+        if r.get("financial_type") not in _FUTU_CUMULATIVE_TYPES:
+            continue
+        rd_ts = pd.to_datetime(r.get("date_time_str"), errors="coerce")
+        if pd.isna(rd_ts):
+            continue
+        rd = rd_ts.date()
+        if rd < FUND_START:
+            continue
+        data = {it["display_name"]: it.get("data")
+                for it in r.get("item_list", [])
+                if it.get("data") is not None and it.get("display_name")}
+        rows.append({
+            "report_date": rd,
+            "currency": _futu_currency(r),
+            "period_kind": _FUTU_PERIOD_KIND.get(r.get("financial_type")),
+            "data": data,
+        })
+    if not rows:
+        return pd.DataFrame(columns=["report_date", "currency", "period_kind", "data"])
+    df = pd.DataFrame(rows).drop_duplicates(subset=["report_date"], keep="first")
+    return df.sort_values("report_date").reset_index(drop=True)
+
+
+def fetch_intl_fund_statements(stock_code: str, stmt_type: str) -> pd.DataFrame:
+    """港/美三大报表。stmt_type ∈ income|balance|cashflow。
+
+    列: report_date, currency, period_kind, data(dict)。只含 report_date >= FUND_START
+    且累计/年度口径的行(单季 Q4 剔除,规则见 _FUTU_CUMULATIVE_TYPES 上方注释)。
+    按 INTL_FUND_SOURCE 分发:futu(默认,主源)/ em(备源,东财长表 pivot)。
+    """
+    if INTL_FUND_SOURCE == "em":
+        return _fetch_intl_fund_statements_em(stock_code, stmt_type)
+    code = futu_code(stock_code)
+    stype = _FUTU_STMT_TYPE[stmt_type]
+    reports = _futu_fetch_reports(code, stype)
+    return _futu_reports_to_df(reports)
+
+
+# ---------------------------------------------------------------------------
+# Step 1c 探测结论(type4 关键指标完整 display_name 清单,00700.HK + AAPL.US,2026-07-10,
+# 见 task-2-report):**两市场指标层可得列集合有系统性差异** —— HK 含"每股指标"分节
+# (EPS/EPS 稀释/BPS/每股经营现金流)+ 比率类(ROE/ROA/毛利率/净利率/资产负债率/流动比率
+# 等);US 的 type4 只有 TTM 比率类(毛利率/归母净利率/ROE/ROA/流动比率等),**完全没有
+# 每股指标分节**(EPS/BPS/OCF_PS 只在利润表/资产负债表/现金流量表的 item_list 里,不在
+# type4),也没有营业收入/净利润绝对值科目,更没有等价于"资产负债率"的科目(US 有"有息
+# 负债率",定义不同,不可替代映射)。两市场的成长率科目(HK"近3年增长率"/US"成长能力"
+# 分节实测为空)都不是同比(yoy)口径,故 revenue_yoy/net_profit_yoy 改用最接近的"每股"
+# 科目的 yoy 字段代理(HK:每股营业收入→revenue_yoy,基本每股收益→net_profit_yoy;
+# 股本变动不大时约等于对应绝对值同比增速)。US 无任何可代理科目,revenue/net_profit
+# 及二者 yoy 在 US 指标层恒为 NULL(这是已知的、如实记录的市场覆盖差异,不是 bug)。
+# ---------------------------------------------------------------------------
+_FUND_INDICATOR_COLS = [
+    "eps", "eps_diluted", "bps", "ocf_ps", "roe", "roa", "gross_margin", "net_margin",
+    "debt_ratio", "current_ratio", "revenue", "revenue_yoy", "net_profit", "net_profit_yoy",
+]
+
+_FUTU_MAININDEX_MAP_HK = {
+    "基本每股收益（元）": "eps",
+    "稀释每股收益（元）": "eps_diluted",
+    "每股净资产（元）": "bps",
+    "每股经营现金净流量（元）": "ocf_ps",
+    "净资产收益率(ROE)": "roe",
+    "总资产净利率(ROA)": "roa",
+    "销售毛利率": "gross_margin",
+    "销售净利率": "net_margin",
+    "资产负债率": "debt_ratio",
+    "流动比率": "current_ratio",
+    # revenue/net_profit 绝对值:HK type4 未提供任何绝对值科目(只有每股/比率类),置 NULL。
+}
+_FUTU_YOY_PROXY_HK = {"revenue_yoy": "每股营业收入（元）", "net_profit_yoy": "基本每股收益（元）"}
+
+_FUTU_MAININDEX_MAP_US = {
+    "毛利率": "gross_margin",
+    "归母净利率": "net_margin",
+    "净资产收益率（ROE）": "roe",
+    "总资产净利率（ROA）": "roa",
+    "流动比率": "current_ratio",
+    # eps/eps_diluted/bps/ocf_ps/debt_ratio/revenue/net_profit(及二者 yoy):US type4
+    # 完全未提供对应科目,全部置 NULL(已知市场覆盖差异,见上方说明)。
+}
+_FUTU_YOY_PROXY_US: dict[str, str] = {}  # US type4 无可代理科目,revenue_yoy/net_profit_yoy 恒 NULL
+
+
+def _futu_indicator_reports_to_df(stock_code: str, reports: list[dict]) -> pd.DataFrame:
+    """report_list(type4,关键指标)-> DataFrame[report_date, currency, 指标宽表列...]。
+
+    从 fetch_intl_fund_indicator 抽出的模块级转换(2026-07-11 最终审查 M3):独立成函数
+    后,13_fundamental_update_intl.py 的每周增量核查可以直接喂"首页 reports"(已按
+    num=_RECENT_NUM 拉过,不必再分页翻全量),复用同一份 report→指标行转换逻辑,省下
+    每股每周 1 次多余的全量分页请求。
+
+    节标题行(item 无 data 字段)跳过;revenue_yoy/net_profit_yoy 无直接科目时取代理科目
+    的 yoy 字段(见上方说明;美股无代理,恒 NULL)。累计口径过滤规则与 fetch_intl_fund_statements
+    相同(排除单季 Q4,同样避免同 report_date 撞行——US type4 实测也存在 FY/Q4 同日两行)。
+    """
+    market = "hk" if stock_code.upper().endswith(".HK") else "us"
+    mapping = _FUTU_MAININDEX_MAP_HK if market == "hk" else _FUTU_MAININDEX_MAP_US
+    yoy_proxy = _FUTU_YOY_PROXY_HK if market == "hk" else _FUTU_YOY_PROXY_US
+
+    rows = []
+    for r in reports:
+        if r.get("financial_type") not in _FUTU_CUMULATIVE_TYPES:
+            continue
+        rd_ts = pd.to_datetime(r.get("date_time_str"), errors="coerce")
+        if pd.isna(rd_ts):
+            continue
+        rd = rd_ts.date()
+        if rd < FUND_START:
+            continue
+        items = {it["display_name"]: it for it in r.get("item_list", []) if it.get("data") is not None}
+        row = {"report_date": rd, "currency": _futu_currency(r)}
+        for col in _FUND_INDICATOR_COLS:
+            row[col] = None
+        for name, col in mapping.items():
+            if name in items:
+                row[col] = items[name].get("data")
+        for col, proxy_name in yoy_proxy.items():
+            if proxy_name in items:
+                row[col] = items[proxy_name].get("yoy")
+        rows.append(row)
+    if not rows:
+        return pd.DataFrame(columns=["report_date", "currency"] + _FUND_INDICATOR_COLS)
+    df = pd.DataFrame(rows).drop_duplicates(subset=["report_date"], keep="first")
+    return df.sort_values("report_date").reset_index(drop=True)
+
+
+def fetch_intl_fund_indicator(stock_code: str) -> pd.DataFrame:
+    """富途 type4 关键指标(全量分页)。列 = 指标宽表数值列(_FUND_INDICATOR_COLS)+
+    report_date, currency。report→行转换见 _futu_indicator_reports_to_df。
+    """
+    code = futu_code(stock_code)
+    reports = _futu_fetch_reports(code, _FUTU_INDICATOR_TYPE)
+    return _futu_indicator_reports_to_df(stock_code, reports)
+
+
+# ---------------------------------------------------------------------------
+# em 备源(ASTOCK_INTL_FUND_SOURCE=em 时启用):东财长表 pivot 成与 futu 路径同构的
+# DataFrame[report_date, currency, period_kind, data(dict)]。currency/period_kind 东财
+# 长表无对应字段,如实置 NULL(不臆造)。美股按 brief"美股季报科目在'累计'"的实测结论,
+# "年报"+"累计季报"两枚举取并集(与美股 ann_date 回填同一策略,见 12_init_fundamental_intl.py
+# _fetch_us_ann_and_indicators),覆盖
+# FY/H1/9M;"单季报"(含 Q1)同样不纳入 —— 与 futu 路径的累计口径规则保持一致语义。
+# ---------------------------------------------------------------------------
+_EM_STMT_HK = {"income": "利润表", "balance": "资产负债表", "cashflow": "现金流量表"}
+_EM_STMT_US = {"income": "综合损益表", "balance": "资产负债表", "cashflow": "现金流量表"}
+
+
+def _fetch_intl_fund_statements_em(stock_code: str, stmt_type: str) -> pd.DataFrame:
+    import akshare as ak
+
+    market = "hk" if stock_code.upper().endswith(".HK") else "us"
+    symbol = stock_code.split(".")[0]
+
+    if market == "hk":
+        df = with_retry(ak.stock_financial_hk_report_em,
+                        stock=symbol, symbol=_EM_STMT_HK[stmt_type], indicator="报告期")
+        if df is None or df.empty:
+            return pd.DataFrame(columns=["report_date", "currency", "period_kind", "data"])
+        df = df.rename(columns={"REPORT_DATE": "report_date"})
+        item_col, amount_col = "STD_ITEM_NAME", "AMOUNT"
+    else:
+        frames = []
+        for ind in ("年报", "累计季报"):
+            d = with_retry(ak.stock_financial_us_report_em,
+                           stock=symbol, symbol=_EM_STMT_US[stmt_type], indicator=ind)
+            if d is not None and not d.empty:
+                frames.append(d)
+        if not frames:
+            return pd.DataFrame(columns=["report_date", "currency", "period_kind", "data"])
+        df = pd.concat(frames, ignore_index=True).rename(columns={"REPORT_DATE": "report_date"})
+        item_col, amount_col = "ITEM_NAME", "AMOUNT"
+
+    df["report_date"] = pd.to_datetime(df["report_date"], errors="coerce").dt.date
+    df = df.dropna(subset=["report_date"])
+    rows = []
+    for rd, g in df.groupby("report_date"):
+        data = {getattr(r, item_col): getattr(r, amount_col)
+                for r in g.itertuples() if pd.notna(getattr(r, amount_col))}
+        rows.append({"report_date": rd, "currency": None, "period_kind": None, "data": data})
+    if not rows:
+        return pd.DataFrame(columns=["report_date", "currency", "period_kind", "data"])
+    out = pd.DataFrame(rows)
+    out = out[out["report_date"] >= FUND_START].sort_values("report_date").reset_index(drop=True)
+    return out
+
+
+# ===========================================================================
+# 板块(行业/概念)。设计: docs/superpowers/specs/2026-07-10-board-rotation-design.md
+# 双源:ASTOCK_BOARD_SOURCE=em(东财,默认)| futu(富途 OpenD)。
+#  - em:行情族(push2/push2his)接口,与个股日线共享 IP 限流预算;独有板块资金流。
+#    hist/资金流按板块名称查询(改名需先刷新 board 表);cons 支持直接传 BK 代码。
+#  - futu:本地网关零封禁风险(2026-07-11 东财封禁 17h+ 时接入),口径为富途自家
+#    (行业~131/概念~792,代码 SH.LISTxxxx);无板块资金流(返回空);历史K线耗
+#    富途月度额度(~923 标的/月)且限频 10 次/30s(专用节流 _futu_history_kline)。
+# 两套口径同库共存:board.source 列区分,代码名字空间(BKxxxx vs SH.LISTxxxx)不冲突。
+# ===========================================================================
+BOARD_SOURCE = os.getenv("ASTOCK_BOARD_SOURCE", "em")
+RENAME_BOARD_HIST = {
+    "日期": "trade_date", "开盘": "open", "收盘": "close", "最高": "high", "最低": "low",
+    "成交量": "volume",   # 源单位:手;入库前 ×100 统一为股(全库约定)
+    "成交额": "amount", "涨跌幅": "pct_chg", "换手率": "turnover",
+}
+RENAME_BOARD_FLOW = {
+    "日期": "trade_date",
+    "主力净流入-净额": "main_net", "主力净流入-净占比": "main_net_pct",
+    "超大单净流入-净额": "xlarge_net", "超大单净流入-净占比": "xlarge_net_pct",
+    "大单净流入-净额": "large_net", "大单净流入-净占比": "large_net_pct",
+    "中单净流入-净额": "mid_net", "中单净流入-净占比": "mid_net_pct",
+    "小单净流入-净额": "small_net", "小单净流入-净占比": "small_net_pct",
+}
+_BOARD_FLOW_COLS = ["trade_date", "main_net", "main_net_pct", "xlarge_net", "xlarge_net_pct",
+                    "large_net", "large_net_pct", "mid_net", "mid_net_pct",
+                    "small_net", "small_net_pct"]
+
+
+def _fetch_board_list_em() -> pd.DataFrame:
+    import akshare as ak
+
+    frames = []
+    for btype, fn in (("industry", ak.stock_board_industry_name_em),
+                      ("concept", ak.stock_board_concept_name_em)):
+        df = with_retry(fn)
+        df = df.rename(columns={"板块代码": "board_code", "板块名称": "board_name"})
+        df = df[["board_code", "board_name"]].copy()
+        df["board_type"] = btype
+        frames.append(df)
+    return pd.concat(frames, ignore_index=True)
+
+
+def _fetch_board_list_futu() -> pd.DataFrame:
+    from futu import Market, Plate
+
+    frames = []
+    for btype, plate in (("industry", Plate.INDUSTRY), ("concept", Plate.CONCEPT)):
+        df = _futu_call("get_plate_list", Market.SH, plate)  # Market.SH 即沪深 A 股板块全集
+        df = df.rename(columns={"code": "board_code", "plate_name": "board_name"})
+        df = df[["board_code", "board_name"]].copy()
+        df["board_type"] = btype
+        frames.append(df)
+    return pd.concat(frames, ignore_index=True)
+
+
+def fetch_board_list() -> pd.DataFrame:
+    """板块列表(源见 BOARD_SOURCE)。列: board_code, board_name, board_type。"""
+    return _fetch_board_list_futu() if BOARD_SOURCE == "futu" else _fetch_board_list_em()
+
+
+# 富途历史K线限频比其他接口严(10 次/30s),单独节流;返回三元组也与 _futu_call 不兼容
+_futu_kl_last = [0.0]
+_FUTU_KL_INTERVAL = float(os.getenv("ASTOCK_FUTU_KL_INTERVAL", "3.1"))
+
+
+def _futu_history_kline(code: str, start: str) -> pd.DataFrame:
+    from futu import KLType, AuType
+
+    ctx = _futu_context()
+    with _futu_lock:
+        wait = _FUTU_KL_INTERVAL - (time.monotonic() - _futu_kl_last[0])
+        if wait > 0:
+            time.sleep(wait)
+        _futu_kl_last[0] = time.monotonic()
+    ret, df, _ = ctx.request_history_kline(code, start=start, end=None,
+                                           ktype=KLType.K_DAY, autype=AuType.NONE,
+                                           max_count=None)
+    if ret != 0:
+        raise RuntimeError(f"futu request_history_kline({code}) ret={ret}: {df}")
+    return df
+
+
+def _fetch_board_daily_em(board_name: str, board_type: str, start: str) -> pd.DataFrame:
+    import akshare as ak
+
+    if board_type == "industry":   # 行业与概念的 period 参数拼写不同(akshare 实况)
+        df = with_retry(ak.stock_board_industry_hist_em, symbol=board_name,
+                        start_date=start, end_date="20500101", period="日k", adjust="")
+    else:
+        df = with_retry(ak.stock_board_concept_hist_em, symbol=board_name,
+                        start_date=start, end_date="20500101", period="daily", adjust="")
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.rename(columns=RENAME_BOARD_HIST)
+    keep = [c for c in RENAME_BOARD_HIST.values() if c in df.columns]
+    df = df[keep].copy()
+    df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.date
+    df["volume"] = pd.to_numeric(df["volume"], errors="coerce") * 100  # 手 → 股
+    return df.dropna(subset=["trade_date"])
+
+
+def _fetch_board_daily_futu(board_code: str, start: str) -> pd.DataFrame:
+    # 富途列名: time_key/open/close/high/low/volume(股)/turnover(成交额,元)/
+    # turnover_rate(换手率%)/change_rate(涨跌幅%)
+    start_iso = f"{start[:4]}-{start[4:6]}-{start[6:8]}" if len(start) == 8 else start
+    df = with_retry(_futu_history_kline, board_code, start_iso, retries=3)
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.rename(columns={"time_key": "trade_date", "turnover": "amount",
+                            "turnover_rate": "turnover", "change_rate": "pct_chg"})
+    keep = ["trade_date", "open", "high", "low", "close", "volume", "amount", "pct_chg", "turnover"]
+    df = df[[c for c in keep if c in df.columns]].copy()
+    df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.date
+    return df.dropna(subset=["trade_date"])
+
+
+def fetch_board_daily(board_code: str, board_name: str, board_type: str,
+                      start: str = "19900101") -> pd.DataFrame:
+    """板块指数日线(不复权,源见 BOARD_SOURCE)。em 按名称查询,futu 按代码查询。"""
+    if BOARD_SOURCE == "futu":
+        return _fetch_board_daily_futu(board_code, start)
+    return _fetch_board_daily_em(board_name, board_type, start)
+
+
+def fetch_board_cons(board_code: str, board_type: str) -> set[str]:
+    """板块当前成分股(全代码集合)。两源均按板块代码调用,规避板块改名。"""
+    if BOARD_SOURCE == "futu":
+        df = _futu_call("get_plate_stock", board_code)
+        if df is None or df.empty:
+            return set()
+        # 富途代码 'SZ.000333' -> '000333.SZ'
+        out = set()
+        for s in df["code"].astype(str):
+            mkt, _, sym = s.partition(".")
+            if mkt in ("SZ", "SH", "BJ") and sym:
+                out.add(f"{sym}.{mkt}")
+        return out
+    import akshare as ak
+
+    fn = (ak.stock_board_industry_cons_em if board_type == "industry"
+          else ak.stock_board_concept_cons_em)
+    df = with_retry(fn, symbol=board_code)
+    if df is None or df.empty:
+        return set()
+    return {to_full_code(str(s)) for s in df["代码"].astype(str)}
+
+
+def fetch_board_fund_flow(board_name: str, board_type: str) -> pd.DataFrame:
+    """板块历史资金流(lmt=0 全部可用历史)。净额单位:元;占比单位:%。
+
+    仅 em 源提供;futu 源无板块资金流,直接返回空(调用方 upsert 空帧为 0 行,无副作用)。
+    """
+    if BOARD_SOURCE == "futu":
+        return pd.DataFrame()
+    import akshare as ak
+
+    fn = (ak.stock_sector_fund_flow_hist if board_type == "industry"
+          else ak.stock_concept_fund_flow_hist)
+    df = with_retry(fn, symbol=board_name)
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.rename(columns=RENAME_BOARD_FLOW)
+    keep = [c for c in _BOARD_FLOW_COLS if c in df.columns]
+    df = df[keep].copy()
+    df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.date
+    for col in keep[1:]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df.dropna(subset=["trade_date"])
+
+
+def upsert_board_daily(conn, board_code: str, df: pd.DataFrame) -> int:
+    df = drop_unclosed_bars(df, f"{board_code}(board)")   # A股 15:30 口径同样适用板块指数
+    if df.empty:
+        return 0
+    cols = ["board_code", "trade_date", "open", "high", "low", "close",
+            "volume", "amount", "pct_chg", "turnover"]
+    rows = [(board_code, r.trade_date,
+             _num(r, "open"), _num(r, "high"), _num(r, "low"), _num(r, "close"),
+             _int(r, "volume"), _num(r, "amount"), _num(r, "pct_chg"), _num(r, "turnover"))
+            for r in df.itertuples(index=False)]
+    return upsert(conn, "board_daily", cols, rows, ["board_code", "trade_date"])
+
+
+def upsert_board_fund_flow(conn, board_code: str, df: pd.DataFrame) -> int:
+    if df.empty:
+        return 0
+    df = df[df["trade_date"] <= safe_cutoff_date()]       # 资金流盘中也有当日快照行,同口径过滤
+    if df.empty:
+        return 0
+    cols = ["board_code"] + _BOARD_FLOW_COLS
+    rows = [(board_code, r.trade_date,
+             _num(r, "main_net"), _num(r, "main_net_pct"),
+             _num(r, "xlarge_net"), _num(r, "xlarge_net_pct"),
+             _num(r, "large_net"), _num(r, "large_net_pct"),
+             _num(r, "mid_net"), _num(r, "mid_net_pct"),
+             _num(r, "small_net"), _num(r, "small_net_pct"))
+            for r in df.itertuples(index=False)]
+    return upsert(conn, "board_fund_flow", cols, rows, ["board_code", "trade_date"])
+
+
+def sync_board_members(conn, board_code: str, current: set[str], today: date) -> tuple[int, int]:
+    """成分区间表 diff:新出现开区间(valid_from=today),消失关区间(valid_to=today)。
+
+    current 为空集时禁止调用(接口故障与"板块清空"无法区分,宁可当天不更新)——
+    调用方负责跳过,这里再 assert 一道防线。
+    重开同日关闭的区间(极端:当天误关又回来)由 ON CONFLICT 恢复 valid_to=NULL。
+    """
+    assert current, f"{board_code}: current 成分为空,调用方应跳过而非同步"
+    with conn.cursor() as cur:
+        cur.execute("SELECT stock_code FROM board_member "
+                    "WHERE board_code = %s AND valid_to IS NULL", (board_code,))
+        open_set = {r[0] for r in cur.fetchall()}
+        to_open = sorted(current - open_set)
+        to_close = sorted(open_set - current)
+        if to_close:
+            cur.execute("UPDATE board_member SET valid_to = %s "
+                        "WHERE board_code = %s AND valid_to IS NULL AND stock_code = ANY(%s)",
+                        (today, board_code, to_close))
+        if to_open:
+            psycopg2.extras.execute_values(
+                cur,
+                "INSERT INTO board_member (board_code, stock_code, valid_from) VALUES %s "
+                "ON CONFLICT (board_code, stock_code, valid_from) DO UPDATE SET valid_to = NULL",
+                [(board_code, s, today) for s in to_open])
+    conn.commit()
+    return len(to_open), len(to_close)
+
+
+# ===========================================================================
+# C 补全包:事件类拉取 + 股票域 alias(2026-07-11)。
+# 设计: docs/superpowers/specs/2026-07-11-events-pack-design.md
+# ===========================================================================
+_alias_cache: Optional[dict] = None
+
+
+def resolve_alias(conn, stock_code: str) -> tuple[str, str]:
+    """改码股解析:返回 (fetch_code, fetch_symbol)——用新码拉数、按旧码入库。
+
+    无 alias 时返回自身 (stock_code, 其 symbol 部分)。缓存一次性读全表(表极小,
+    人工维护);进程内新增 alias 需重启生效(可接受)。
+    """
+    global _alias_cache
+    if _alias_cache is None:
+        with conn.cursor() as cur:
+            cur.execute("SELECT old_code, new_code, new_symbol FROM stock_alias")
+            _alias_cache = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+        conn.commit()
+    if stock_code in _alias_cache:
+        return _alias_cache[stock_code]
+    return stock_code, stock_code.rsplit(".", 1)[0]
+
+
+# 业绩预告(stock_yjyg_em)列映射,2026-07-11 实探
+RENAME_YJYG = {
+    "股票代码": "symbol", "预测指标": "forecast_type", "业绩变动": "change_desc",
+    "预测数值": "forecast_value", "业绩变动幅度": "change_pct",
+    "业绩变动原因": "reason", "公告日期": "ann_date",
+}
+# 业绩快报(stock_yjkb_em)列映射:标准东财 yjkb 布局;essential 列运行时断言
+RENAME_YJKB = {
+    "股票代码": "symbol", "每股收益": "eps",
+    "营业收入-营业收入": "revenue", "营业收入-同比增长": "revenue_yoy",
+    "净利润-净利润": "net_profit", "净利润-同比增长": "net_profit_yoy",
+    "每股净资产": "bps", "净资产收益率": "roe", "公告日期": "ann_date",
+}
+# 龙虎榜(stock_lhb_detail_em)列映射,2026-07-11 实探全列
+RENAME_LHB = {
+    "代码": "symbol", "上榜日": "trade_date", "解读": "interpret",
+    "收盘价": "close", "涨跌幅": "pct_chg", "龙虎榜净买额": "net_buy",
+    "龙虎榜买入额": "buy_amount", "龙虎榜卖出额": "sell_amount", "上榜原因": "reason",
+}
+# 北向个股序列(stock_hsgt_individual_em),2026-07-11 实探
+RENAME_NB = {
+    "持股日期": "trade_date", "持股数量": "hold_shares",
+    "持股市值": "hold_value", "持股数量占A股百分比": "hold_ratio",
+}
+
+
+def _events_cross(fn, rename: dict, date_kw: dict) -> pd.DataFrame:
+    """事件类截面通用:调接口→重命名→补 stock_code→日期列转 date。"""
+    df = with_retry(fn, **date_kw)
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.rename(columns=rename)
+    missing = {"symbol"} - set(df.columns)
+    if missing:
+        raise RuntimeError(f"事件接口列漂移,缺 {missing}(现列: {list(df.columns)[:8]}...)")
+    keep = [c for c in set(rename.values()) if c in df.columns]
+    df = df[keep].copy()
+    df["symbol"] = df["symbol"].astype(str).str.zfill(6)
+    df["stock_code"] = df["symbol"].map(to_full_code)
+    for col in ("ann_date", "trade_date"):
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
+    return df
+
+
+def fetch_yjyg(period: str) -> pd.DataFrame:
+    """业绩预告截面。period 'YYYYMMDD'(季末)。"""
+    import akshare as ak
+    return _events_cross(ak.stock_yjyg_em, RENAME_YJYG, {"date": period})
+
+
+def fetch_yjkb(period: str) -> pd.DataFrame:
+    """业绩快报截面。"""
+    import akshare as ak
+    return _events_cross(ak.stock_yjkb_em, RENAME_YJKB, {"date": period})
+
+
+def fetch_lhb(start: str, end: str) -> pd.DataFrame:
+    """龙虎榜明细,start/end 'YYYYMMDD'。"""
+    import akshare as ak
+    return _events_cross(ak.stock_lhb_detail_em, RENAME_LHB,
+                         {"start_date": start, "end_date": end})
+
+
+def fetch_nb_hold(symbol: str) -> pd.DataFrame:
+    """北向个股持股序列(沪深港通标的才有;非标的返回空)。"""
+    import akshare as ak
+
+    def _call(sym):
+        # 非陆股通标的时 akshare 内部对 None 取下标抛 TypeError:确定性空结果,
+        # 不重试(同 fetch_valuation 套路)
+        try:
+            return ak.stock_hsgt_individual_em(symbol=sym)
+        except (TypeError, KeyError):
+            return pd.DataFrame()
+
+    df = with_retry(_call, symbol)
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.rename(columns=RENAME_NB)
+    keep = [c for c in set(RENAME_NB.values()) if c in df.columns]
+    df = df[keep].copy()
+    df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.date
+    return df.dropna(subset=["trade_date"])
