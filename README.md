@@ -115,7 +115,7 @@ SELECT * FROM weekly_price_hfq WHERE stock_code = '000001.SZ' ORDER BY period_st
 - **hk_/us_ 表的 amount(成交额)与 turnover(换手率)恒为 NULL**(腾讯源不提供),周/月线的 sum(amount) 也为 NULL。
 - 美股历史深度因股而异(部分 1984 起,多数 2007 起;CBOE.US 无数据——腾讯无 BZX 源)。
 - pct_chg 口径:A 股为东财除权口径;港/美为裸收盘环比(拆股日会出现大幅值,复权分析请用 hfq/qfq 视图价格自行计算)。
-- 港股当日数据通常次日增量运行时补齐(日历派生自新浪指数,发布有延迟)。
+- 港股当日数据**当晚 18:05 到位**(日历带腾讯代理探测,2026-07-11 起;此前受新浪指数发布延迟拖到次日甚至周一)。
 
 ```bash
 psql -d astock -f 04_schema_hk_us.sql
