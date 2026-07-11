@@ -306,6 +306,18 @@ ASTOCK_DB_USER=zhu .venv/bin/python 15_events_update.py            # 每日:lhb 
 0 19 * * 1-5  cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu ASTOCK_DB_PASSWORD='xxx' .venv/bin/python 15_events_update.py >> update_events.log 2>&1
 ```
 
+## 港美指数成分(区间表)
+
+`index_member`:HSI(93)/HSTECH(30)/HSCEI(50)富途快照 + 每日 diff;**SPX 含 1996 起真实历史区间**(1,255 段,TSLA 2020-12-21 纳入实证);NDX 现势(Wikipedia,源偶发超时次日自愈)。
+
+```sql
+-- 防偷看:任意历史日的指数成分
+SELECT stock_code FROM index_member
+WHERE index_code='SPX' AND in_date <= '2019-06-01' AND (out_date IS NULL OR out_date > '2019-06-01');
+```
+
+限制:恒指族历史成分免费不可得——`note='snapshot-open'` 行的 in_date 是**建档日**非真实纳入日,从建档起 diff 累积;A股成分见板块数据层(另建)。
+
 ## 板块数据(行业/概念,支持板块轮动)
 
 设计:`docs/superpowers/specs/2026-07-10-board-rotation-design.md`。东财体系,
