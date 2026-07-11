@@ -48,7 +48,7 @@
 - 周/月线:`*_weekly/monthly_price_hfq` 物化视图(后复权),日更脚本 `REFRESH CONCURRENTLY`;前复权 = 视图值 ÷ 该股最新因子。
 - 港股中文名:`hk_stock_basic.name_cn`(HKEX 官方 name 是英文缩写如"VGT"=胜宏科技);源优先级 东财 spot → 新浪列表 → 腾讯 A+H 对照(common.fetch_hk_names_cn),06 日更幂等刷新。
 - 收盘防护(A股 15:30 口径):`safe_cutoff_date()` 取网络/本机双时钟较保守值、10 分钟 TTL、全程留痕;`drop_unclosed_bars()` 挂在 upsert 层。
-- **A 股板块层双源**(基本面二期分支,用法详见 README"板块数据"节):`ASTOCK_BOARD_SOURCE=em|futu`,`board.source` 列区分同库共存。富途口径 2026-07-11 全量已入库(行业 131+概念 792,日线 2018 起 122 万行,成分区间 10.5 万);东财口径(独有五档资金流、日线 ~2006 起)待行情族解封后由守候脚本自动补。成分区间表 `valid_from`=观测日(建库日 2026-07-11),as-of 查询早于观测起点返回空是正确行为。
+- **A 股板块层双源**(基本面二期分支,用法详见 README"板块数据"节):`ASTOCK_BOARD_SOURCE=em|futu`,`board.source` 列区分同库共存。富途口径 2026-07-11 全量已入库(行业 131+概念 792,日线 2018 起 122 万行,成分区间 10.5 万);东财口径(官方五档资金流、日线 ~2006 起)待行情族解封后由守候脚本自动补;板块资金流已有派生口径:物化视图 board_capital_flow = 个股 capital_flow × 当前成分求和(近 1 年,当前成分回算近似)。成分区间表 `valid_from`=观测日(建库日 2026-07-11),as-of 查询早于观测起点返回空是正确行为。
 
 ## 4. 事故档案(已了结,留教训)
 
