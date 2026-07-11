@@ -1749,10 +1749,15 @@ def _fetch_intl_fund_statements_em(stock_code: str, stmt_type: str) -> pd.DataFr
 
 # ===========================================================================
 # 板块(行业/概念)。设计: docs/superpowers/specs/2026-07-10-board-rotation-design.md
-# 全部为东财行情族(push2/push2his)接口,与个股日线共享 IP 限流预算。
-# hist/资金流接口按板块名称查询(板块改名需先刷新 board 表);cons 接口支持
-# 直接传 BK 代码(akshare 源码 re.match('^BK\\d+')),不受改名影响。
+# 双源:ASTOCK_BOARD_SOURCE=em(东财,默认)| futu(富途 OpenD)。
+#  - em:行情族(push2/push2his)接口,与个股日线共享 IP 限流预算;独有板块资金流。
+#    hist/资金流按板块名称查询(改名需先刷新 board 表);cons 支持直接传 BK 代码。
+#  - futu:本地网关零封禁风险(2026-07-11 东财封禁 17h+ 时接入),口径为富途自家
+#    (行业~131/概念~792,代码 SH.LISTxxxx);无板块资金流(返回空);历史K线耗
+#    富途月度额度(~923 标的/月)且限频 10 次/30s(专用节流 _futu_history_kline)。
+# 两套口径同库共存:board.source 列区分,代码名字空间(BKxxxx vs SH.LISTxxxx)不冲突。
 # ===========================================================================
+BOARD_SOURCE = os.getenv("ASTOCK_BOARD_SOURCE", "em")
 RENAME_BOARD_HIST = {
     "日期": "trade_date", "开盘": "open", "收盘": "close", "最高": "high", "最低": "low",
     "成交量": "volume",   # 源单位:手;入库前 ×100 统一为股(全库约定)
@@ -1771,8 +1776,7 @@ _BOARD_FLOW_COLS = ["trade_date", "main_net", "main_net_pct", "xlarge_net", "xla
                     "small_net", "small_net_pct"]
 
 
-def fetch_board_list() -> pd.DataFrame:
-    """东财行业+概念板块列表。列: board_code, board_name, board_type。"""
+def _fetch_board_list_em() -> pd.DataFrame:
     import akshare as ak
 
     frames = []
@@ -1786,11 +1790,50 @@ def fetch_board_list() -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
-def fetch_board_daily(board_name: str, board_type: str, start: str = "19900101") -> pd.DataFrame:
-    """板块指数日线(不复权)。行业与概念的 period 参数拼写不同(akshare 实况)。"""
+def _fetch_board_list_futu() -> pd.DataFrame:
+    from futu import Market, Plate
+
+    frames = []
+    for btype, plate in (("industry", Plate.INDUSTRY), ("concept", Plate.CONCEPT)):
+        df = _futu_call("get_plate_list", Market.SH, plate)  # Market.SH 即沪深 A 股板块全集
+        df = df.rename(columns={"code": "board_code", "plate_name": "board_name"})
+        df = df[["board_code", "board_name"]].copy()
+        df["board_type"] = btype
+        frames.append(df)
+    return pd.concat(frames, ignore_index=True)
+
+
+def fetch_board_list() -> pd.DataFrame:
+    """板块列表(源见 BOARD_SOURCE)。列: board_code, board_name, board_type。"""
+    return _fetch_board_list_futu() if BOARD_SOURCE == "futu" else _fetch_board_list_em()
+
+
+# 富途历史K线限频比其他接口严(10 次/30s),单独节流;返回三元组也与 _futu_call 不兼容
+_futu_kl_last = [0.0]
+_FUTU_KL_INTERVAL = float(os.getenv("ASTOCK_FUTU_KL_INTERVAL", "3.1"))
+
+
+def _futu_history_kline(code: str, start: str) -> pd.DataFrame:
+    from futu import KLType, AuType
+
+    ctx = _futu_context()
+    with _futu_lock:
+        wait = _FUTU_KL_INTERVAL - (time.monotonic() - _futu_kl_last[0])
+        if wait > 0:
+            time.sleep(wait)
+        _futu_kl_last[0] = time.monotonic()
+    ret, df, _ = ctx.request_history_kline(code, start=start, end=None,
+                                           ktype=KLType.K_DAY, autype=AuType.NONE,
+                                           max_count=None)
+    if ret != 0:
+        raise RuntimeError(f"futu request_history_kline({code}) ret={ret}: {df}")
+    return df
+
+
+def _fetch_board_daily_em(board_name: str, board_type: str, start: str) -> pd.DataFrame:
     import akshare as ak
 
-    if board_type == "industry":
+    if board_type == "industry":   # 行业与概念的 period 参数拼写不同(akshare 实况)
         df = with_retry(ak.stock_board_industry_hist_em, symbol=board_name,
                         start_date=start, end_date="20500101", period="日k", adjust="")
     else:
@@ -1806,8 +1849,42 @@ def fetch_board_daily(board_name: str, board_type: str, start: str = "19900101")
     return df.dropna(subset=["trade_date"])
 
 
+def _fetch_board_daily_futu(board_code: str, start: str) -> pd.DataFrame:
+    # 富途列名: time_key/open/close/high/low/volume(股)/turnover(成交额,元)/
+    # turnover_rate(换手率%)/change_rate(涨跌幅%)
+    start_iso = f"{start[:4]}-{start[4:6]}-{start[6:8]}" if len(start) == 8 else start
+    df = with_retry(_futu_history_kline, board_code, start_iso, retries=3)
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.rename(columns={"time_key": "trade_date", "turnover": "amount",
+                            "turnover_rate": "turnover", "change_rate": "pct_chg"})
+    keep = ["trade_date", "open", "high", "low", "close", "volume", "amount", "pct_chg", "turnover"]
+    df = df[[c for c in keep if c in df.columns]].copy()
+    df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.date
+    return df.dropna(subset=["trade_date"])
+
+
+def fetch_board_daily(board_code: str, board_name: str, board_type: str,
+                      start: str = "19900101") -> pd.DataFrame:
+    """板块指数日线(不复权,源见 BOARD_SOURCE)。em 按名称查询,futu 按代码查询。"""
+    if BOARD_SOURCE == "futu":
+        return _fetch_board_daily_futu(board_code, start)
+    return _fetch_board_daily_em(board_name, board_type, start)
+
+
 def fetch_board_cons(board_code: str, board_type: str) -> set[str]:
-    """板块当前成分股(全代码集合)。传 BK 代码调用,规避板块改名。"""
+    """板块当前成分股(全代码集合)。两源均按板块代码调用,规避板块改名。"""
+    if BOARD_SOURCE == "futu":
+        df = _futu_call("get_plate_stock", board_code)
+        if df is None or df.empty:
+            return set()
+        # 富途代码 'SZ.000333' -> '000333.SZ'
+        out = set()
+        for s in df["code"].astype(str):
+            mkt, _, sym = s.partition(".")
+            if mkt in ("SZ", "SH", "BJ") and sym:
+                out.add(f"{sym}.{mkt}")
+        return out
     import akshare as ak
 
     fn = (ak.stock_board_industry_cons_em if board_type == "industry"
@@ -1819,7 +1896,12 @@ def fetch_board_cons(board_code: str, board_type: str) -> set[str]:
 
 
 def fetch_board_fund_flow(board_name: str, board_type: str) -> pd.DataFrame:
-    """板块历史资金流(lmt=0 全部可用历史)。净额单位:元;占比单位:%。"""
+    """板块历史资金流(lmt=0 全部可用历史)。净额单位:元;占比单位:%。
+
+    仅 em 源提供;futu 源无板块资金流,直接返回空(调用方 upsert 空帧为 0 行,无副作用)。
+    """
+    if BOARD_SOURCE == "futu":
+        return pd.DataFrame()
     import akshare as ak
 
     fn = (ak.stock_sector_fund_flow_hist if board_type == "industry"
@@ -1892,3 +1974,113 @@ def sync_board_members(conn, board_code: str, current: set[str], today: date) ->
                 [(board_code, s, today) for s in to_open])
     conn.commit()
     return len(to_open), len(to_close)
+
+
+# ===========================================================================
+# C 补全包:事件类拉取 + 股票域 alias(2026-07-11)。
+# 设计: docs/superpowers/specs/2026-07-11-events-pack-design.md
+# ===========================================================================
+_alias_cache: Optional[dict] = None
+
+
+def resolve_alias(conn, stock_code: str) -> tuple[str, str]:
+    """改码股解析:返回 (fetch_code, fetch_symbol)——用新码拉数、按旧码入库。
+
+    无 alias 时返回自身 (stock_code, 其 symbol 部分)。缓存一次性读全表(表极小,
+    人工维护);进程内新增 alias 需重启生效(可接受)。
+    """
+    global _alias_cache
+    if _alias_cache is None:
+        with conn.cursor() as cur:
+            cur.execute("SELECT old_code, new_code, new_symbol FROM stock_alias")
+            _alias_cache = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+        conn.commit()
+    if stock_code in _alias_cache:
+        return _alias_cache[stock_code]
+    return stock_code, stock_code.rsplit(".", 1)[0]
+
+
+# 业绩预告(stock_yjyg_em)列映射,2026-07-11 实探
+RENAME_YJYG = {
+    "股票代码": "symbol", "预测指标": "forecast_type", "业绩变动": "change_desc",
+    "预测数值": "forecast_value", "业绩变动幅度": "change_pct",
+    "业绩变动原因": "reason", "公告日期": "ann_date",
+}
+# 业绩快报(stock_yjkb_em)列映射:标准东财 yjkb 布局;essential 列运行时断言
+RENAME_YJKB = {
+    "股票代码": "symbol", "每股收益": "eps",
+    "营业收入-营业收入": "revenue", "营业收入-同比增长": "revenue_yoy",
+    "净利润-净利润": "net_profit", "净利润-同比增长": "net_profit_yoy",
+    "每股净资产": "bps", "净资产收益率": "roe", "公告日期": "ann_date",
+}
+# 龙虎榜(stock_lhb_detail_em)列映射,2026-07-11 实探全列
+RENAME_LHB = {
+    "代码": "symbol", "上榜日": "trade_date", "解读": "interpret",
+    "收盘价": "close", "涨跌幅": "pct_chg", "龙虎榜净买额": "net_buy",
+    "龙虎榜买入额": "buy_amount", "龙虎榜卖出额": "sell_amount", "上榜原因": "reason",
+}
+# 北向个股序列(stock_hsgt_individual_em),2026-07-11 实探
+RENAME_NB = {
+    "持股日期": "trade_date", "持股数量": "hold_shares",
+    "持股市值": "hold_value", "持股数量占A股百分比": "hold_ratio",
+}
+
+
+def _events_cross(fn, rename: dict, date_kw: dict) -> pd.DataFrame:
+    """事件类截面通用:调接口→重命名→补 stock_code→日期列转 date。"""
+    df = with_retry(fn, **date_kw)
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.rename(columns=rename)
+    missing = {"symbol"} - set(df.columns)
+    if missing:
+        raise RuntimeError(f"事件接口列漂移,缺 {missing}(现列: {list(df.columns)[:8]}...)")
+    keep = [c for c in set(rename.values()) if c in df.columns]
+    df = df[keep].copy()
+    df["symbol"] = df["symbol"].astype(str).str.zfill(6)
+    df["stock_code"] = df["symbol"].map(to_full_code)
+    for col in ("ann_date", "trade_date"):
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
+    return df
+
+
+def fetch_yjyg(period: str) -> pd.DataFrame:
+    """业绩预告截面。period 'YYYYMMDD'(季末)。"""
+    import akshare as ak
+    return _events_cross(ak.stock_yjyg_em, RENAME_YJYG, {"date": period})
+
+
+def fetch_yjkb(period: str) -> pd.DataFrame:
+    """业绩快报截面。"""
+    import akshare as ak
+    return _events_cross(ak.stock_yjkb_em, RENAME_YJKB, {"date": period})
+
+
+def fetch_lhb(start: str, end: str) -> pd.DataFrame:
+    """龙虎榜明细,start/end 'YYYYMMDD'。"""
+    import akshare as ak
+    return _events_cross(ak.stock_lhb_detail_em, RENAME_LHB,
+                         {"start_date": start, "end_date": end})
+
+
+def fetch_nb_hold(symbol: str) -> pd.DataFrame:
+    """北向个股持股序列(沪深港通标的才有;非标的返回空)。"""
+    import akshare as ak
+
+    def _call(sym):
+        # 非陆股通标的时 akshare 内部对 None 取下标抛 TypeError:确定性空结果,
+        # 不重试(同 fetch_valuation 套路)
+        try:
+            return ak.stock_hsgt_individual_em(symbol=sym)
+        except (TypeError, KeyError):
+            return pd.DataFrame()
+
+    df = with_retry(_call, symbol)
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.rename(columns=RENAME_NB)
+    keep = [c for c in set(RENAME_NB.values()) if c in df.columns]
+    df = df[keep].copy()
+    df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.date
+    return df.dropna(subset=["trade_date"])

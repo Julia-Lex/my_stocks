@@ -107,9 +107,11 @@ def make_loader_a(market: str, task: str):
     p = c.MARKETS[market]["prefix"]
 
     def load_one(conn, r):
+        # 改码股治理:用新码拉数、按旧码(r.stock_code)入库,保历史连续(如 BGNE→ONC)
+        fetch_code, _fetch_sym = c.resolve_alias(conn, r.stock_code)
         n_stmt = 0
         for st in ("income", "balance", "cashflow"):
-            df = c.fetch_intl_fund_statements(r.stock_code, st)
+            df = c.fetch_intl_fund_statements(fetch_code, st)
             if df.empty:
                 continue
             rows = [
@@ -124,7 +126,7 @@ def make_loader_a(market: str, task: str):
             )
 
         n_ind = 0
-        ind = c.fetch_intl_fund_indicator(r.stock_code)
+        ind = c.fetch_intl_fund_indicator(fetch_code)
         if not ind.empty:
             cols = ["stock_code", "report_date", "currency"] + c._FUND_INDICATOR_COLS
             rows = []
@@ -318,7 +320,8 @@ def phase_b_ann(conn, market: str, stocks: pd.DataFrame, workers: int, skip_ann:
     guard_stats = {"dropped": 0, "rows": 0}
 
     def load(conn2, r):
-        df, dropped = _fetch_us_ann_and_indicators(r.symbol)
+        _fc, fetch_sym = c.resolve_alias(conn2, r.stock_code)  # 改码股用新 symbol 查东财
+        df, dropped = _fetch_us_ann_and_indicators(fetch_sym)
         with guard_lock:
             guard_stats["dropped"] += dropped
             guard_stats["rows"] += len(df)

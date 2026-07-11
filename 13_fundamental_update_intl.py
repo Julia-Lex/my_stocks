@@ -60,7 +60,8 @@ def make_updater(market: str, task_stk: str):
     p = c.MARKETS[market]["prefix"]
 
     def update_one(conn, r):
-        code = c.futu_code(r.stock_code)
+        fetch_code, fetch_sym = c.resolve_alias(conn, r.stock_code)  # 改码股:新码拉、旧码入库
+        code = c.futu_code(fetch_code)
         n_stmt = 0
         for st, stype in c._FUTU_STMT_TYPE.items():
             df = c._futu_reports_to_df(_fetch_recent_reports(code, stype))
@@ -93,7 +94,7 @@ def make_updater(market: str, task_stk: str):
         # 美股:ann_date + 指标增补(护栏/容差 join 复用 12 阶段B 实现)
         n_ann = 0
         if market == "us":
-            df_ann, _dropped = _m12._fetch_us_ann_and_indicators(r.symbol)
+            df_ann, _dropped = _m12._fetch_us_ann_and_indicators(fetch_sym)
             if not df_ann.empty:
                 n_ann, _ = _m12._apply_ann_us(conn, r.stock_code, df_ann)
 
