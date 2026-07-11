@@ -208,6 +208,48 @@ _IND_COLS = ["report_date", "eps", "bps", "roe", "roa", "gross_margin", "net_mar
              "debt_ratio", "current_ratio"]
 _VAL_COLS = ["trade_date", "pe", "pe_ttm", "pb", "ps_ttm", "dv_ratio", "total_mv"]
 
+# 腾讯实时行情(qt.gtimg.cn)~ 分隔字段下标,2026-07-11 用 00700/00005/AAPL/MSFT 实测:
+# 港股: f3=最新价 f39=PE(TTM) f58=PB f47=股息率% f44=总市值(亿) f75=币种
+# 美股: f3=最新价 f39=PE(TTM) f47=EPS f44=总市值(亿) f35=币种(无 PB,用 价格/BPS 现算)
+_TX_QUOTE_URL = "https://qt.gtimg.cn/q="
+
+
+def _parse_tx_quote(market: str, text: str) -> dict | None:
+    """解析腾讯行情响应为估值 dict(纯函数,便于测试)。字段缺失记 None。"""
+    f = text.split("~")
+    if len(f) < 60:
+        return None
+
+    def num(i):
+        try:
+            v = float(f[i])
+            return v if v != 0 else None
+        except (ValueError, IndexError):
+            return None
+
+    mv = num(44)
+    out = {"trade_date": "实时", "pe": None, "pe_ttm": num(39), "ps_ttm": None,
+           "total_mv": mv * 1e8 if mv else None, "price": num(3)}
+    if market == "hk":
+        out.update({"pb": num(58), "dv_ratio": num(47)})
+    else:
+        out.update({"pb": None, "dv_ratio": None})
+    return out
+
+
+def _fetch_live_valuation(market: str, code: str) -> dict | None:
+    """港/美股实时估值(库里无估值表,取腾讯实时行情)。失败返回 None,页面留空。"""
+    import requests
+
+    sym = code.split(".")[0]
+    tx_code = ("hk" if market == "hk" else "us") + sym
+    try:
+        resp = requests.get(_TX_QUOTE_URL + tx_code, timeout=5)
+        resp.encoding = "gbk"
+        return _parse_tx_quote(market, resp.text)
+    except Exception:  # noqa: BLE001 — 实时源不可用不阻塞页面
+        return None
+
 
 def _row_dict(cols, row):
     if row is None:
@@ -247,6 +289,14 @@ def fundamental(market: Literal["cn", "hk", "us"], code: str = Query(..., max_le
             indicator = _row_dict(_IND_COLS, cur.fetchone())
     finally:
         conn.close()
+    if market != "cn":
+        # 港/美股无估值表,取腾讯实时行情;美股接口无 PB,用 价格/每股净资产 现算(同为美元)
+        valuation = _fetch_live_valuation(market, code)
+        if valuation:
+            price = valuation.pop("price", None)
+            if (market == "us" and valuation["pb"] is None and price
+                    and indicator and indicator.get("bps")):
+                valuation["pb"] = round(price / indicator["bps"], 2)
     return {"code": code, "name": name_row[0], "market": market,
             "industry": industry, "valuation": valuation, "indicator": indicator}
 

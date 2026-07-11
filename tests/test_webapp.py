@@ -127,8 +127,28 @@ def test_fundamental_hk():
     r = client.get("/api/fundamental", params={"market": "hk", "code": "00001.HK"})
     assert r.status_code == 200
     d = r.json()
-    assert d["valuation"] is None          # 估值表仅 A股
+    # 港股估值来自腾讯实时行情:网络正常时应有 PE/市值;实时源故障时容忍 None
+    v = d["valuation"]
+    assert v is None or (v["pe_ttm"] and v["total_mv"] > 1e9 and "price" not in v)
     assert d["indicator"] and d["indicator"]["eps"] is not None
+
+
+def test_parse_tx_quote():
+    from webapp.app import _parse_tx_quote
+
+    # 字段样本取自 2026-07-11 实测(00005.HK / MSFT.US)
+    f = ["0"] * 78
+    f[3], f[39], f[58], f[47], f[44] = "153.500", "16.06", "1.71", "3.82", "26376.7705"
+    v = _parse_tx_quote("hk", "~".join(f))
+    assert v["pe_ttm"] == 16.06 and v["pb"] == 1.71 and v["dv_ratio"] == 3.82
+    assert abs(v["total_mv"] - 26376.7705e8) < 1e6 and v["price"] == 153.5
+
+    f2 = ["0"] * 71
+    f2[3], f2[39], f2[44] = "385.10", "22.94", "28598.1"
+    v2 = _parse_tx_quote("us", "~".join(f2))
+    assert v2["pe_ttm"] == 22.94 and v2["pb"] is None and v2["dv_ratio"] is None
+
+    assert _parse_tx_quote("hk", "v_pv_none=1") is None   # 无效响应
 
 
 def test_fundamental_not_found():
