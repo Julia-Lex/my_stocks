@@ -240,6 +240,27 @@ def test_boards_snapshot_bad_type():
     assert r.status_code == 422
 
 
+def test_boards_snapshot_periods_and_mktcap():
+    """涨跌幅周期与板块市值:period 跨期收益、mktcap=成员总市值聚合。"""
+    today = client.get("/api/boards/snapshot", params={"btype": "industry"}).json()
+    it0 = today["items"][0]
+    assert it0["mktcap"] and it0["mktcap"] > 1e10          # 市值字段存在且量级合理
+    r20 = client.get("/api/boards/snapshot", params={"btype": "industry", "period": "20d"})
+    assert r20.status_code == 200
+    d20 = {i["code"]: i["pct_chg"] for i in r20.json()["items"]}
+    dtoday = {i["code"]: i["pct_chg"] for i in today["items"]}
+    diffs = [abs(d20[c] - dtoday[c]) for c in d20 if c in dtoday
+             and d20[c] is not None and dtoday[c] is not None]
+    assert sum(1 for x in diffs if x > 0.5) > 50           # 20日涨幅明显不同于当日
+    # 排序仍按所选周期涨幅降序
+    pcts = [i["pct_chg"] for i in r20.json()["items"] if i["pct_chg"] is not None]
+    assert pcts == sorted(pcts, reverse=True)
+    assert client.get("/api/boards/snapshot",
+                      params={"btype": "industry", "period": "ytd"}).status_code == 200
+    assert client.get("/api/boards/snapshot",
+                      params={"btype": "industry", "period": "3d"}).status_code == 422
+
+
 def test_boards_concept_excludes_generic():
     """概念板块剔除泛概念(成员>400,如融资融券/MSCI),真主题(存储器/CPO)保留。"""
     r = client.get("/api/boards/snapshot", params={"btype": "concept"})

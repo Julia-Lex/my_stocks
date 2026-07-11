@@ -382,31 +382,66 @@ _CONCEPT_FILTER_SQL = (
     " AND b.board_name <> ALL(%s)")
 
 
+_PERIOD_DAYS = {"5d": 5, "10d": 10, "20d": 20, "60d": 60, "120d": 120, "250d": 250}
+
+
 @app.get("/api/boards/snapshot")
 def boards_snapshot(btype: Literal["industry", "concept"],
-                    date_: str | None = Query(None, alias="date", max_length=10)):
-    """某交易日(默认最新)全部板块行情快照,按涨跌幅降序。热力图/涨跌榜共用。"""
+                    date_: str | None = Query(None, alias="date", max_length=10),
+                    period: Literal["today", "5d", "10d", "20d",
+                                    "60d", "120d", "250d", "ytd"] = "today"):
+    """某交易日(默认最新)全部板块快照,按所选周期涨跌幅降序。
+
+    period=today 用当日 pct_chg;其余用 收盘/基期收盘-1(基期=N 个交易日前
+    或上年末)。mktcap=现役成员股总市值之和(估值表最新日)。
+    """
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             d = _board_latest_date(cur, date_)
-            sql = ("SELECT b.board_code, b.board_name, d.pct_chg, d.amount, d.turnover, d.close "
-                   "FROM board_daily d JOIN board b USING (board_code) "
-                   "WHERE d.trade_date = %s AND b.board_type = %s")
-            params: list = [d, btype]
+            # 基期日
+            base_d = None
+            if period == "ytd":
+                cur.execute("SELECT max(trade_date) FROM board_daily "
+                            "WHERE trade_date < date_trunc('year', %s::date)", (d,))
+                base_d = cur.fetchone()[0]
+            elif period != "today":
+                cur.execute("SELECT trade_date FROM (SELECT DISTINCT trade_date "
+                            "FROM board_daily WHERE trade_date <= %s "
+                            "ORDER BY trade_date DESC LIMIT %s) t "
+                            "ORDER BY trade_date LIMIT 1", (d, _PERIOD_DAYS[period] + 1))
+                base_d = cur.fetchone()[0]
+            pct_expr = ("cur.pct_chg" if period == "today" else
+                        "CASE WHEN base.close > 0 THEN (cur.close/base.close - 1)*100 END")
+            base_join = ("" if period == "today" else
+                         "LEFT JOIN board_daily base ON base.board_code = cur.board_code "
+                         "AND base.trade_date = %s ")
+            cur.execute("SELECT max(trade_date) FROM daily_valuation WHERE trade_date <= %s", (d,))
+            val_d = cur.fetchone()[0]
+            sql = (f"SELECT b.board_code, b.board_name, {pct_expr} AS pct, "
+                   f"cur.amount, cur.turnover, cur.close, mv.mktcap "
+                   f"FROM board_daily cur JOIN board b USING (board_code) "
+                   f"{base_join}"
+                   f"LEFT JOIN (SELECT m.board_code, sum(v.total_mv) AS mktcap "
+                   f"           FROM board_member m JOIN daily_valuation v "
+                   f"             ON v.stock_code = m.stock_code AND v.trade_date = %s "
+                   f"           WHERE m.valid_to IS NULL GROUP BY 1) mv "
+                   f"  ON mv.board_code = cur.board_code "
+                   f"WHERE cur.trade_date = %s AND b.board_type = %s")
+            params: list = ([base_d] if base_join else []) + [val_d, d, btype]
             if btype == "concept":
                 sql += _CONCEPT_FILTER_SQL
                 params += [_GENERIC_CONCEPT_MAX_MEMBERS, list(_STYLE_LABEL_BOARDS)]
-            cur.execute(sql + " ORDER BY d.pct_chg DESC NULLS LAST", params)
+            cur.execute(sql + " ORDER BY 3 DESC NULLS LAST", params)
             rows = cur.fetchall()
     finally:
         conn.close()
-    return {"date": d.isoformat() if d else None,
-            "items": [{"code": r[0], "name": r[1],
-                       "pct_chg": float(r[2]) if r[2] is not None else None,
-                       "amount": float(r[3]) if r[3] is not None else None,
-                       "turnover": float(r[4]) if r[4] is not None else None,
-                       "close": float(r[5]) if r[5] is not None else None} for r in rows]}
+    fnum = lambda v: float(v) if v is not None else None  # noqa: E731
+    return {"date": d.isoformat() if d else None, "period": period,
+            "base_date": base_d.isoformat() if base_d else None,
+            "items": [{"code": r[0], "name": r[1], "pct_chg": fnum(r[2]),
+                       "amount": fnum(r[3]), "turnover": fnum(r[4]),
+                       "close": fnum(r[5]), "mktcap": fnum(r[6])} for r in rows]}
 
 
 @app.get("/api/boards/calendar")

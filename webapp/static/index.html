@@ -132,10 +132,15 @@
   <div id="boards">
     <div class="freq" id="bctrl">
       <label><input type="radio" name="btype" value="industry" checked>行业(131个)</label>
-      <label><input type="radio" name="btype" value="concept">概念(剔除泛概念,按成交额前100)</label>
+      <label><input type="radio" name="btype" value="concept">概念(剔除泛概念)</label>
       <span class="hint" id="bdate"></span>
     </div>
-    <div class="sec">市场热力图 <span class="note-inline">面积=成交额 · 颜色=涨跌幅 · 点击下钻成员股</span></div>
+    <div class="sec">市场热力图 <span class="note-inline" id="tmapnote">面积=成交额 · 颜色=今日涨跌幅 · 点击下钻成员股</span></div>
+    <div class="freq" id="tctrl" style="flex-wrap:wrap">
+      <span class="hint">面积</span><span class="ptabs" id="tareatabs"></span>
+      <span class="hint" style="margin-left:8px">数量</span><span class="ptabs" id="tcounttabs"></span>
+      <span class="hint" style="margin-left:8px">涨跌幅</span><span class="ptabs" id="tperiodtabs"></span>
+    </div>
     <div class="kwrap"><canvas id="tmap"></canvas><div id="tmaptip" class="ktip"></div>
       <div id="tmapcrumb" style="margin-top:8px"></div></div>
     <div class="sec">轮动热力日历 <span class="note-inline">近20个交易日涨跌幅 · 按近5日累计涨幅排序 · 点名称看K线</span></div>
@@ -481,8 +486,15 @@ window.addEventListener('resize', ()=>{ const k=quote?.klines?.[kperiod];
 /* ================== A股板块 ================== */
 let mode = 'stock';
 let btype = 'industry';
-let snap = {};            // btype → snapshot 响应
+let snap = {};            // btype → 今日快照(涨跌榜/对比候选共用)
+let snapP = {};           // `${btype}:${period}` → 跨期快照(热力图用)
 let calCache = {};        // btype → calendar 响应
+// 热力图筛选(参照富途):面积依据 / 显示数量 / 涨跌幅周期
+let tArea = 'amount', tCount = 'all', tPeriod = 'today';
+const TAREAS   = [['amount','成交额'], ['mktcap','市值']];
+const TCOUNTS  = [['30','前30'], ['50','前50'], ['100','前100'], ['all','全部']];
+const TPERIODS = [['today','今日'], ['5d','5日'], ['10d','10日'], ['20d','20日'],
+                  ['60d','60日'], ['120d','120日'], ['250d','250日'], ['ytd','年初至今']];
 let tmapItems = null;     // 当前热力图数据 [{code,name,pct,amount,isStock}]
 let tmapRects = [];
 let bcode = null, bname = '', bperiod2 = 'day';
@@ -508,12 +520,8 @@ async function loadBoards(){
     }
     const s = snap[btype];
     $('#bdate').textContent = `数据日期:${s.date}`;
-    // 概念板块只取成交额前 100,行业全量
-    let items = s.items.filter(i=>i.amount);
-    if(btype==='concept') items = [...items].sort((a,b)=>b.amount-a.amount).slice(0,100);
-    tmapItems = items.map(i=>({code:i.code, name:i.name, pct:i.pct_chg, amount:i.amount}));
-    $('#tmapcrumb').innerHTML = '';
-    drawTreemap(tmapItems, false);
+    renderTctrl();
+    await updateTreemap();
     renderRanks(s.items);
     renderDatalist();
     if(!calCache[btype]){
@@ -522,6 +530,44 @@ async function loadBoards(){
     }
     if(calCache[btype]) renderCalendar(calCache[btype]);
   }catch(ex){ err(ex.message); }
+}
+
+function renderTctrl(){
+  const mk = (pairs, cur) => pairs.map(([v,l])=>
+    `<span class="ptab${v===cur?' on':''}" data-v="${v}">${l}</span>`).join('');
+  $('#tareatabs').innerHTML   = mk(TAREAS, tArea);
+  $('#tcounttabs').innerHTML  = mk(TCOUNTS, tCount);
+  $('#tperiodtabs').innerHTML = mk(TPERIODS, tPeriod);
+  document.querySelectorAll('#tareatabs .ptab').forEach(t=>t.onclick=()=>{ tArea=t.dataset.v; renderTctrl(); updateTreemap(); });
+  document.querySelectorAll('#tcounttabs .ptab').forEach(t=>t.onclick=()=>{ tCount=t.dataset.v; renderTctrl(); updateTreemap(); });
+  document.querySelectorAll('#tperiodtabs .ptab').forEach(t=>t.onclick=()=>{ tPeriod=t.dataset.v; renderTctrl(); updateTreemap(); });
+}
+
+async function updateTreemap(){
+  let s;
+  if(tPeriod==='today'){ s = snap[btype]; }
+  else{
+    const key = `${btype}:${tPeriod}`;
+    if(!snapP[key]){
+      const r = await fetch(`/api/boards/snapshot?btype=${btype}&period=${tPeriod}`);
+      if(!r.ok){ err('热力图数据加载失败 HTTP '+r.status); return; }
+      snapP[key] = await r.json();
+    }
+    s = snapP[key];
+  }
+  let items = s.items
+    .map(i=>({code:i.code, name:i.name, pct:i.pct_chg,
+              amount: tArea==='mktcap' ? i.mktcap : i.amount,
+              amt: i.amount, mkt: i.mktcap}))
+    .filter(i=>i.amount > 0);
+  items.sort((a,b)=>b.amount-a.amount);
+  if(tCount!=='all') items = items.slice(0, +tCount);
+  tmapItems = items;
+  $('#tmapcrumb').innerHTML = '';
+  drawTreemap(items, false);
+  const plabel = TPERIODS.find(p=>p[0]===tPeriod)[1];
+  $('#tmapnote').textContent = `面积=${tArea==='mktcap'?'总市值':'成交额'}`+
+    ` · 颜色=${plabel}涨跌幅${s.base_date?`(基期 ${s.base_date})`:''} · 点击下钻成员股`;
 }
 
 const pctColor = p => {
@@ -574,8 +620,10 @@ function drawTreemap(items, isMembers){
     if(!r){ tip.style.display='none'; return; }
     tip.style.display='block';
     tip.style.left=Math.min(mx+14, W-180)+'px'; tip.style.top=(my+14)+'px';
+    const amt = r.it.amt ?? r.it.amount;
     tip.innerHTML = `${r.it.name}<br>涨跌 ${(r.it.pct>=0?'+':'')+(r.it.pct??0).toFixed(2)}%`+
-      `<br>成交额 ${(r.it.amount/1e8).toFixed(1)} 亿`;
+      `<br>成交额 ${(amt/1e8).toFixed(1)} 亿`+
+      (r.it.mkt ? `<br>总市值 ${(r.it.mkt/1e8).toFixed(0)} 亿` : '');
   };
   cv.onmouseleave = ()=>{ tip.style.display='none'; };
   cv.onclick = async e=>{
