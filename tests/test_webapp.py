@@ -212,6 +212,29 @@ def test_kline_bad_period():
     assert r.status_code == 422
 
 
+def test_index_kline():
+    """市场指数日线 + 全市场总成交量(该市场全部个股当日 volume 之和)。"""
+    r = client.get("/api/index/kline",
+                   params={"market": "cn", "code": "sh000001", "days": 250})
+    assert r.status_code == 200
+    d = r.json()
+    bars = d["bars"]
+    assert len(bars) == 250
+    assert bars == sorted(bars, key=lambda b: b["d"])
+    last = bars[-1]
+    assert last["l"] <= last["o"] <= last["h"] and last["l"] <= last["c"] <= last["h"]
+    # 个股日线可能比指数滞后 1-2 天(cron 时点),取最近 5 根内的最大量判断
+    assert max(b["v"] for b in bars[-5:]) > 1e10   # A股全市场日总量千亿股量级
+    r_hk = client.get("/api/index/kline", params={"market": "hk", "code": "HSI"})
+    assert r_hk.status_code == 200
+    assert max(b["v"] for b in r_hk.json()["bars"][-5:]) > 1e9
+    r_us = client.get("/api/index/kline", params={"market": "us", "code": ".INX"})
+    assert r_us.status_code == 200
+    assert max(b["v"] for b in r_us.json()["bars"][-5:]) > 1e8
+    assert client.get("/api/index/kline",
+                      params={"market": "cn", "code": "nosuch"}).status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # A股板块
 # ---------------------------------------------------------------------------

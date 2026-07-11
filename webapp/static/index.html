@@ -85,6 +85,8 @@
            border-radius:12px; padding:14px; }
   #kchart, #bkchart { width:100%; height:420px; display:block; cursor:crosshair; }
   #ffchart { width:100%; height:660px; display:block; }
+  #indices { display:none; }
+  .ixchart { width:100%; height:340px; display:block; cursor:crosshair; }
   .ktip { position:absolute; display:none; pointer-events:none; background:rgba(20,20,20,.85);
           color:#fff; font-size:12px; padding:6px 9px; border-radius:8px; z-index:5;
           white-space:nowrap; line-height:1.6; }
@@ -119,6 +121,7 @@
   <nav id="mainnav">
     <span class="snav on" data-m="stock">个股信息</span>
     <span class="snav" data-m="boards">板块信息</span>
+    <span class="snav" data-m="indices">市场指数</span>
   </nav>
 </aside>
 <div class="wrap">
@@ -129,6 +132,17 @@
       <div id="sug"></div>
     </div>
     <div id="content"></div>
+  </div>
+  <div id="indices">
+    <div class="sec">A股 <span class="ptabs" id="ixp-cn"></span>
+      <span class="note-inline">近一年日线 · 灰色曲线=全市场个股成交量总和</span></div>
+    <div class="kwrap"><canvas id="ixc-cn" class="ixchart"></canvas><div id="ixt-cn" class="ktip"></div></div>
+    <div class="sec">港股 <span class="ptabs" id="ixp-hk"></span>
+      <span class="note-inline">近一年日线 · 灰色曲线=全市场个股成交量总和</span></div>
+    <div class="kwrap"><canvas id="ixc-hk" class="ixchart"></canvas><div id="ixt-hk" class="ktip"></div></div>
+    <div class="sec">美股 <span class="ptabs" id="ixp-us"></span>
+      <span class="note-inline">近一年日线 · 灰色曲线=精选池约550只成交量总和(非全市场)</span></div>
+    <div class="kwrap"><canvas id="ixc-us" class="ixchart"></canvas><div id="ixt-us" class="ktip"></div></div>
   </div>
   <div id="boards">
     <div class="freq" id="bctrl">
@@ -487,13 +501,46 @@ function drawKline(bars, cvSel='#kchart', tipSel='#ktip'){
     tip.style.display='block';
     tip.style.left = Math.min(e.clientX-rect.left+14, W-170)+'px';
     tip.style.top  = (e.clientY-rect.top+14)+'px';
-    tip.innerHTML = `${b.d}<br>开 ${b.o} 高 ${b.h}<br>低 ${b.l} 收 ${b.c}<br>量 ${(b.v/1e4).toFixed(1)} 万股`;
+    const vtxt = b.v >= 1e8 ? (b.v/1e8).toFixed(1)+' 亿股' : (b.v/1e4).toFixed(1)+' 万股';
+    tip.innerHTML = `${b.d}<br>开 ${b.o} 高 ${b.h}<br>低 ${b.l} 收 ${b.c}<br>量 ${vtxt}`;
   };
   cv.onmouseleave = ()=>{ tip.style.display='none'; };
 }
 const getCss = k => getComputedStyle(document.documentElement).getPropertyValue(k).trim();
 window.addEventListener('resize', ()=>{ const k=quote?.klines?.[kperiod];
   if(view==='quote' && k?.bars?.length && $('#kchart')) drawKline(k.bars); });
+
+/* ================== 市场指数 ================== */
+const INDICES = {
+  cn: [['sh000001','上证指数'],['sz399001','深证成指'],['sz399006','创业板指'],
+       ['sh000300','沪深300'],['sh000905','中证500'],['sh000016','上证50']],
+  hk: [['HSI','恒生指数'],['HSTECH','恒生科技'],['HSCEI','国企指数']],
+  us: [['.INX','标普500'],['.IXIC','纳斯达克'],['.DJI','道琼斯'],['.NDX','纳指100']],
+};
+let ixSel = { cn:'sh000001', hk:'HSI', us:'.INX' };
+let ixCache = {};   // `${market}:${code}` → bars
+let ixLoaded = false;
+
+function loadIndices(){
+  ['cn','hk','us'].forEach(m=>renderIndex(m));
+  ixLoaded = true;
+}
+
+async function renderIndex(m){
+  $(`#ixp-${m}`).innerHTML = INDICES[m].map(([c,l])=>
+    `<span class="ptab${c===ixSel[m]?' on':''}" data-c="${c}">${l}</span>`).join('');
+  document.querySelectorAll(`#ixp-${m} .ptab`).forEach(t=>t.onclick=()=>{
+    ixSel[m]=t.dataset.c; renderIndex(m); });
+  const key = `${m}:${ixSel[m]}`;
+  try{
+    if(!ixCache[key]){
+      const r = await fetch(`/api/index/kline?market=${m}&code=${encodeURIComponent(ixSel[m])}&days=250`);
+      if(!r.ok) throw new Error(`指数加载失败 HTTP ${r.status}`);
+      ixCache[key] = (await r.json()).bars;
+    }
+    drawKline(ixCache[key], `#ixc-${m}`, `#ixt-${m}`);
+  }catch(ex){ err(ex.message); }
+}
 
 /* ================== A股板块 ================== */
 let mode = 'stock';
@@ -523,7 +570,9 @@ document.querySelectorAll('#mainnav .snav').forEach(t=>t.onclick=()=>{
   document.querySelectorAll('#mainnav .snav').forEach(x=>x.classList.toggle('on', x===t));
   $('#stockpane').style.display = mode==='stock' ? 'block' : 'none';
   $('#boards').style.display = mode==='boards' ? 'block' : 'none';
+  $('#indices').style.display = mode==='indices' ? 'block' : 'none';
   if(mode==='boards' && !snap[sk()]) loadBoards();
+  if(mode==='indices') loadIndices();
 });
 document.querySelectorAll('input[name=btype]').forEach(rd=>rd.onchange=()=>{ btype=rd.value; loadBoards(); });
 document.querySelectorAll('input[name=bmarket]').forEach(rd=>rd.onchange=()=>{
@@ -850,7 +899,8 @@ async function renderCompare(){
 window.addEventListener('resize', ()=>{ if(mode==='boards'){
   if(tmapItems) drawTreemap(tmapItems, false), $('#tmapcrumb').innerHTML='';
   if(bmarket==='cn' && ffCache[`${btype}:${ffPeriod}`]) renderFundflow();
-  if(cmpBoards.length) renderCompare(); } });
+  if(cmpBoards.length) renderCompare(); }
+  if(mode==='indices' && ixLoaded) loadIndices(); });
 </script>
 </body>
 </html>

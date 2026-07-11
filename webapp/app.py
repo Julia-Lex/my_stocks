@@ -361,6 +361,44 @@ def kline(market: Literal["cn", "hk", "us"], code: str = Query(..., max_length=1
 
 
 # ---------------------------------------------------------------------------
+# 市场指数
+# ---------------------------------------------------------------------------
+_INDEX_TABLES = {
+    "cn": {"index": "index_daily", "price": "daily_price"},
+    "hk": {"index": "hk_index_daily", "price": "hk_daily_price"},
+    "us": {"index": "us_index_daily", "price": "us_daily_price"},
+}
+
+
+@app.get("/api/index/kline")
+def index_kline(market: Literal["cn", "hk", "us"],
+                code: str = Query(..., max_length=16),
+                days: int = Query(250, ge=20, le=1000)):
+    """指数日线,volume 替换为该市场全部个股当日成交量之和(市场总量口径;
+    美股为精选池 ~550 只,总量偏小)。"""
+    t = _INDEX_TABLES[market]
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT trade_date, open, high, low, close FROM {t['index']} "
+                f"WHERE index_code = %s ORDER BY trade_date DESC LIMIT %s", (code, days))
+            rows = cur.fetchall()[::-1]
+            if not rows:
+                raise HTTPException(status_code=404, detail="未找到该指数")
+            cur.execute(
+                f"SELECT trade_date, sum(volume) FROM {t['price']} "
+                f"WHERE trade_date >= %s GROUP BY trade_date", (rows[0][0],))
+            mvol = {r[0]: int(r[1]) for r in cur.fetchall() if r[1] is not None}
+    finally:
+        conn.close()
+    bars = [{"d": r[0].isoformat(),
+             "o": float(r[1]), "h": float(r[2]), "l": float(r[3]), "c": float(r[4]),
+             "v": mvol.get(r[0], 0)} for r in rows]
+    return {"code": code, "market": market, "bars": bars}
+
+
+# ---------------------------------------------------------------------------
 # A股板块(board/board_daily/board_member,2018 年起;board_fund_flow 尚空)
 # ---------------------------------------------------------------------------
 
