@@ -3,12 +3,16 @@
 -- 应用: psql -U zhu -d astock -f 11_schema_board.sql(幂等)
 
 CREATE TABLE IF NOT EXISTS board (
-    board_code  TEXT PRIMARY KEY,          -- 东财代码,如 BK0475
+    board_code  TEXT PRIMARY KEY,          -- 东财 'BK0475' / 富途 'SH.LIST0001',天然不同名字空间
     board_name  TEXT NOT NULL,             -- 最新名称(改名时更新)
     board_type  TEXT NOT NULL CHECK (board_type IN ('industry', 'concept')),
-    is_active   BOOLEAN NOT NULL DEFAULT TRUE,  -- 从东财列表消失置 false,历史数据保留
+    source      TEXT NOT NULL DEFAULT 'em' CHECK (source IN ('em', 'futu')),  -- 板块体系口径
+    is_active   BOOLEAN NOT NULL DEFAULT TRUE,  -- 从该源列表消失置 false,历史数据保留
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- 已建库的存量升级(幂等)
+ALTER TABLE board ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'em'
+    CHECK (source IN ('em', 'futu'));
 
 -- 成分区间表:valid_from 是"观测到纳入"的日期(首次建库日=观测起点,非真实纳入日),
 -- valid_to NULL 表示当前仍在板块内;精度=每日快照粒度。

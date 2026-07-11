@@ -31,11 +31,11 @@ BoardRow = namedtuple("BoardRow", "stock_code board_name board_type")  # stock_c
 def upsert_board_list(conn):
     boards = c.fetch_board_list()
     n = c.upsert(conn, "board",
-                 ["board_code", "board_name", "board_type"],
-                 [(r.board_code, r.board_name, r.board_type)
+                 ["board_code", "board_name", "board_type", "source"],
+                 [(r.board_code, r.board_name, r.board_type, c.BOARD_SOURCE)
                   for r in boards.itertuples(index=False)],
                  ["board_code"], update_cols=["board_name", "board_type"])
-    c.log.info("板块列表 %d 个(行业 %d / 概念 %d)", n,
+    c.log.info("板块列表 %d 个(源 %s,行业 %d / 概念 %d)", n, c.BOARD_SOURCE,
                (boards.board_type == "industry").sum(), (boards.board_type == "concept").sum())
     return boards
 
@@ -43,7 +43,7 @@ def upsert_board_list(conn):
 def load_one_board(conn, r: BoardRow) -> None:
     """单板块全量:日K + 资金流 + 当前成分。r.stock_code 即 board_code。"""
     code = r.stock_code
-    n_d = c.upsert_board_daily(conn, code, c.fetch_board_daily(r.board_name, r.board_type))
+    n_d = c.upsert_board_daily(conn, code, c.fetch_board_daily(code, r.board_name, r.board_type))
     n_f = c.upsert_board_fund_flow(conn, code, c.fetch_board_fund_flow(r.board_name, r.board_type))
     cons = c.fetch_board_cons(code, r.board_type)
     today = c.beijing_now().date()

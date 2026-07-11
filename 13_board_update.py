@@ -30,7 +30,8 @@ def refresh_board_list(conn) -> list:
         c.log.critical("板块列表数量异常(行业 %d / 概念 %d),疑似源故障,本次退出", n_ind, n_con)
         return []
     with conn.cursor() as cur:
-        cur.execute("SELECT board_code FROM board")
+        # 只在当前 source 的名字空间内做退场/复活判断,否则跑 futu 会把 em 板块全标退场
+        cur.execute("SELECT board_code FROM board WHERE source = %s", (c.BOARD_SOURCE,))
         known = {r[0] for r in cur.fetchall()}
         listed = set(boards.board_code)
         gone = sorted(known - listed)
@@ -58,7 +59,7 @@ def update_one_board(conn, r) -> None:
         cur.execute("SELECT max(trade_date) FROM board_daily WHERE board_code = %s", (code,))
         max_d = cur.fetchone()[0]
     start = (max_d + timedelta(days=1)).strftime("%Y%m%d") if max_d else "19900101"
-    n_d = c.upsert_board_daily(conn, code, c.fetch_board_daily(r.board_name, r.board_type, start=start))
+    n_d = c.upsert_board_daily(conn, code, c.fetch_board_daily(code, r.board_name, r.board_type, start=start))
     n_f = c.upsert_board_fund_flow(conn, code, c.fetch_board_fund_flow(r.board_name, r.board_type))
     cons = c.fetch_board_cons(code, r.board_type)
     if cons:
@@ -78,8 +79,9 @@ def main() -> int:
         rows = refresh_board_list(conn)
         if not rows:
             return 1
-        with conn.cursor() as cur:   # 只更新 active 板块
-            cur.execute("SELECT board_code FROM board WHERE is_active")
+        with conn.cursor() as cur:   # 只更新当前 source 的 active 板块
+            cur.execute("SELECT board_code FROM board WHERE is_active AND source = %s",
+                        (c.BOARD_SOURCE,))
             active = {r[0] for r in cur.fetchall()}
         todo = [r for r in rows if r.stock_code in active]
         c.log.info("板块增量:%d 个(并发 3)", len(todo))
