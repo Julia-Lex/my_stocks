@@ -373,7 +373,8 @@ WHERE m.stock_code = '00700.HK' AND m.out_date IS NULL;
 | `board` | 板块字典(代码/名称/类型/源/是否在市) | board_code |
 | `board_member` | 成分**区间表**(valid_from/valid_to) | (board_code, stock_code, valid_from) |
 | `board_daily` | 板块指数日线(volume 单位股) | (board_code, trade_date) |
-| `board_fund_flow` | 板块资金流(主力/超大/大/中/小单净额与占比,元;仅 em 源) | (board_code, trade_date) |
+| `board_fund_flow` | 板块资金流·东财官方口径(五档净额与占比;仅 em 源,待解封) | (board_code, trade_date) |
+| `board_capital_flow`(物化视图) | 板块资金流·派生口径:个股 `capital_flow` × **当前成分**求和(近 1 年;历史用当前成分回算,近似同板块指数) | (board_code, trade_date) |
 
 ### 初始化与增量
 

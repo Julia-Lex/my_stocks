@@ -48,3 +48,19 @@ CREATE TABLE IF NOT EXISTS board_fund_flow (
     small_net  NUMERIC(20,2), small_net_pct  NUMERIC(8,4),  -- 小单
     PRIMARY KEY (board_code, trade_date)
 );
+
+-- 派生:板块资金流聚合(个股 capital_flow × 当前成分求和;富途/东财口径板块通用)。
+-- 注意:用"当前成分"回算全部历史(与板块指数回算同一近似)——观测起点前的真实成分不可知。
+-- 每日由 21_board_update.py 末尾 REFRESH。
+CREATE MATERIALIZED VIEW IF NOT EXISTS board_capital_flow AS
+SELECT m.board_code, cf.trade_date,
+       sum(cf.main_net)  AS main_net,
+       sum(cf.super_net) AS super_net,
+       sum(cf.big_net)   AS big_net,
+       sum(cf.mid_net)   AS mid_net,
+       sum(cf.sml_net)   AS sml_net,
+       count(*)          AS n_members
+FROM capital_flow cf
+JOIN board_member m ON m.stock_code = cf.stock_code AND m.valid_to IS NULL
+GROUP BY m.board_code, cf.trade_date;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bcf_pk ON board_capital_flow (board_code, trade_date);

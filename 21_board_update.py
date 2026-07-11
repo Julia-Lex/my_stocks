@@ -90,6 +90,8 @@ def main() -> int:
         c.log.info("板块增量:%d 个(源 %s,并发 %d)", len(todo), c.BOARD_SOURCE, workers)
         conn.commit()
         c.run_stock_todo(todo, TASK, update_one_board, workers, max_consecutive_errors=15)
+        c.log.info("刷新板块资金流聚合视图 ...")
+        c.refresh_matviews(conn, ["board_capital_flow"])   # 个股 capital_flow × 当前成分派生
         c.log.info("板块增量完成 ✅")
         return 0
     finally:
