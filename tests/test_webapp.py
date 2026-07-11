@@ -307,6 +307,40 @@ def test_boards_members():
     assert it["code"] and it["name"]
 
 
+def test_boards_snapshot_hk_us():
+    """港/美股板块无指数日线,快照从成员股现算:等权涨跌幅 + 成交额近似。"""
+    for market, min_boards in (("hk", 50), ("us", 50)):
+        r = client.get("/api/boards/snapshot", params={"market": market, "btype": "industry"})
+        assert r.status_code == 200
+        d = r.json()
+        assert len(d["items"]) >= min_boards
+        it = d["items"][0]
+        assert it["pct_chg"] is not None and it["amount"] > 0
+        assert it["mktcap"] is None       # 港美无估值表
+        # 周期涨幅同样可算
+        r20 = client.get("/api/boards/snapshot",
+                         params={"market": market, "btype": "industry", "period": "20d"})
+        assert r20.status_code == 200 and r20.json()["items"]
+
+
+def test_boards_members_hk():
+    r0 = client.get("/api/boards/snapshot", params={"market": "hk", "btype": "industry"})
+    code = r0.json()["items"][0]["code"]
+    r = client.get("/api/boards/members", params={"market": "hk", "code": code})
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert len(items) >= 2 and items[0]["name"]
+
+
+def test_boards_calendar_hk():
+    r = client.get("/api/boards/calendar", params={"market": "hk", "btype": "industry",
+                                                   "days": 10})
+    assert r.status_code == 200
+    d = r.json()
+    assert len(d["dates"]) == 10 and len(d["rows"]) >= 50
+    assert all(len(row["values"]) == 10 for row in d["rows"][:5])
+
+
 def test_boards_compare():
     r0 = client.get("/api/boards/snapshot", params={"btype": "industry"})
     codes = [i["code"] for i in r0.json()["items"][:2]]

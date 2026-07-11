@@ -131,8 +131,12 @@
   </div>
   <div id="boards">
     <div class="freq" id="bctrl">
-      <label><input type="radio" name="btype" value="industry" checked>行业(131个)</label>
-      <label><input type="radio" name="btype" value="concept">概念(剔除泛概念)</label>
+      <label><input type="radio" name="bmarket" value="cn" checked>A股</label>
+      <label><input type="radio" name="bmarket" value="hk">港股</label>
+      <label><input type="radio" name="bmarket" value="us">美股</label>
+      <span style="color:var(--border)">|</span>
+      <label><input type="radio" name="btype" value="industry" checked>行业</label>
+      <label><input type="radio" name="btype" value="concept">概念</label>
       <span class="hint" id="bdate"></span>
     </div>
     <div class="sec">市场热力图 <span class="note-inline" id="tmapnote">面积=成交额 · 颜色=今日涨跌幅 · 点击下钻成员股</span></div>
@@ -158,12 +162,14 @@
       <div class="sec">成员股(当日涨跌幅前20)</div>
       <div class="panel"><div id="bmembers"></div></div>
     </div>
-    <div class="sec">板块对比(净值归一,近一年)</div>
-    <div class="kwrap">
-      <input id="cmpinput" list="cmplist" placeholder="输入板块名添加对比(最多6个)">
-      <datalist id="cmplist"></datalist>
-      <div class="chips" id="cmpchips"></div>
-      <canvas id="cmpchart"></canvas>
+    <div id="cmpsec">
+      <div class="sec">板块对比(净值归一,近一年,仅A股)</div>
+      <div class="kwrap">
+        <input id="cmpinput" list="cmplist" placeholder="输入板块名添加对比(最多6个)">
+        <datalist id="cmplist"></datalist>
+        <div class="chips" id="cmpchips"></div>
+        <canvas id="cmpchart"></canvas>
+      </div>
     </div>
   </div>
 </div>
@@ -485,10 +491,12 @@ window.addEventListener('resize', ()=>{ const k=quote?.klines?.[kperiod];
 
 /* ================== A股板块 ================== */
 let mode = 'stock';
+let bmarket = 'cn';       // 板块市场:cn|hk|us(港美从成员股现算,无板块指数/市值)
 let btype = 'industry';
-let snap = {};            // btype → 今日快照(涨跌榜/对比候选共用)
-let snapP = {};           // `${btype}:${period}` → 跨期快照(热力图用)
-let calCache = {};        // btype → calendar 响应
+let snap = {};            // `${bmarket}:${btype}` → 今日快照(涨跌榜/对比候选共用)
+let snapP = {};           // `${bmarket}:${btype}:${period}` → 跨期快照(热力图用)
+let calCache = {};        // `${bmarket}:${btype}` → calendar 响应
+const sk = () => `${bmarket}:${btype}`;
 // 热力图筛选(参照富途):面积依据 / 显示数量 / 涨跌幅周期
 let tArea = 'amount', tCount = 'all', tPeriod = 'today';
 const TAREAS   = [['amount','成交额'], ['mktcap','市值']];
@@ -506,36 +514,46 @@ document.querySelectorAll('#mainnav .snav').forEach(t=>t.onclick=()=>{
   document.querySelectorAll('#mainnav .snav').forEach(x=>x.classList.toggle('on', x===t));
   $('#stockpane').style.display = mode==='stock' ? 'block' : 'none';
   $('#boards').style.display = mode==='boards' ? 'block' : 'none';
-  if(mode==='boards' && !snap[btype]) loadBoards();
+  if(mode==='boards' && !snap[sk()]) loadBoards();
 });
 document.querySelectorAll('input[name=btype]').forEach(rd=>rd.onchange=()=>{ btype=rd.value; loadBoards(); });
+document.querySelectorAll('input[name=bmarket]').forEach(rd=>rd.onchange=()=>{
+  bmarket=rd.value;
+  if(bmarket!=='cn' && tArea==='mktcap') tArea='amount';  // 港美无市值
+  $('#bdetail').style.display='none';
+  loadBoards();
+});
 
 async function loadBoards(){
   err('');
   try{
-    if(!snap[btype]){
-      const r = await fetch(`/api/boards/snapshot?btype=${btype}`);
+    if(!snap[sk()]){
+      const r = await fetch(`/api/boards/snapshot?btype=${btype}&market=${bmarket}`);
       if(!r.ok) throw new Error('板块快照加载失败 HTTP '+r.status);
-      snap[btype] = await r.json();
+      snap[sk()] = await r.json();
     }
-    const s = snap[btype];
-    $('#bdate').textContent = `数据日期:${s.date}`;
+    const s = snap[sk()];
+    $('#bdate').textContent = `数据日期:${s.date}` +
+      (bmarket==='cn' ? '' : ' · 港美板块指标由成员股现算(等权涨跌幅,成交额为收盘×量近似)');
+    // 港美无板块指数,对比区不可用
+    $('#cmpsec').style.display = bmarket==='cn' ? 'block' : 'none';
     renderTctrl();
     await updateTreemap();
     renderRanks(s.items);
     renderDatalist();
-    if(!calCache[btype]){
-      const rc = await fetch(`/api/boards/calendar?btype=${btype}&days=20`);
-      if(rc.ok) calCache[btype] = await rc.json();
+    if(!calCache[sk()]){
+      const rc = await fetch(`/api/boards/calendar?btype=${btype}&days=20&market=${bmarket}`);
+      if(rc.ok) calCache[sk()] = await rc.json();
     }
-    if(calCache[btype]) renderCalendar(calCache[btype]);
+    if(calCache[sk()]) renderCalendar(calCache[sk()]);
   }catch(ex){ err(ex.message); }
 }
 
 function renderTctrl(){
   const mk = (pairs, cur) => pairs.map(([v,l])=>
     `<span class="ptab${v===cur?' on':''}" data-v="${v}">${l}</span>`).join('');
-  $('#tareatabs').innerHTML   = mk(TAREAS, tArea);
+  // 港美无估值表,面积只有成交额(近似)可选
+  $('#tareatabs').innerHTML   = mk(bmarket==='cn' ? TAREAS : TAREAS.slice(0,1), tArea);
   $('#tcounttabs').innerHTML  = mk(TCOUNTS, tCount);
   $('#tperiodtabs').innerHTML = mk(TPERIODS, tPeriod);
   document.querySelectorAll('#tareatabs .ptab').forEach(t=>t.onclick=()=>{ tArea=t.dataset.v; renderTctrl(); updateTreemap(); });
@@ -545,11 +563,11 @@ function renderTctrl(){
 
 async function updateTreemap(){
   let s;
-  if(tPeriod==='today'){ s = snap[btype]; }
+  if(tPeriod==='today'){ s = snap[sk()]; }
   else{
-    const key = `${btype}:${tPeriod}`;
+    const key = `${sk()}:${tPeriod}`;
     if(!snapP[key]){
-      const r = await fetch(`/api/boards/snapshot?btype=${btype}&period=${tPeriod}`);
+      const r = await fetch(`/api/boards/snapshot?btype=${btype}&period=${tPeriod}&market=${bmarket}`);
       if(!r.ok){ err('热力图数据加载失败 HTTP '+r.status); return; }
       snapP[key] = await r.json();
     }
@@ -633,7 +651,7 @@ function drawTreemap(items, isMembers){
     if(isMembers){   // 成员股 → 跳个股查询
       document.querySelector('#mainnav .snav[data-m=stock]').click();
       $('#q').value = `${r.it.name} ${r.it.code}`;
-      pick({market:'cn', code:r.it.code, name:r.it.name});
+      pick({market:bmarket, code:r.it.code, name:r.it.name});
     } else {
       drillMembers(r.it.code, r.it.name);
     }
@@ -642,14 +660,14 @@ function drawTreemap(items, isMembers){
 
 async function drillMembers(code, name){
   try{
-    const r = await fetch(`/api/boards/members?code=${encodeURIComponent(code)}`);
+    const r = await fetch(`/api/boards/members?code=${encodeURIComponent(code)}&market=${bmarket}`);
     if(!r.ok) throw new Error('成员加载失败 HTTP '+r.status);
     const d = await r.json();
     const items = d.items.filter(i=>i.amount)
       .map(i=>({code:i.code, name:i.name, pct:i.pct_chg, amount:i.amount}));
     $('#tmapcrumb').innerHTML = `<span class="backlink" id="tmback">← 返回全部板块</span>
       <span class="note-inline">${name} · ${items.length} 只成员(点股票跳个股页)</span>
-      <span class="backlink" id="tmkline" style="margin-left:12px">看板块K线 →</span>`;
+      <span class="backlink" id="tmkline" style="margin-left:12px">${bmarket==='cn'?'看板块K线 →':'看成员明细 →'}</span>`;
     $('#tmback').onclick = ()=>{ $('#tmapcrumb').innerHTML=''; drawTreemap(tmapItems, false); };
     $('#tmkline').onclick = ()=>showBoardDetail(code, name);
     drawTreemap(items, true);
@@ -690,14 +708,17 @@ async function showBoardDetail(code, name){
 }
 
 async function renderBoardDetail(){
-  $('#bperiod').innerHTML = Object.entries(KP).map(([p,c])=>
+  const hasKline = bmarket === 'cn';        // 港美无板块指数
+  $('#bkchart').parentElement.style.display = hasKline ? 'block' : 'none';
+  $('#bperiod').innerHTML = !hasKline ? '' : Object.entries(KP).map(([p,c])=>
     `<span class="ptab${p===bperiod2?' on':''}" data-p="${p}">${c.label}</span>`).join('');
   document.querySelectorAll('#bperiod .ptab').forEach(t=>t.onclick=()=>{ bperiod2=t.dataset.p; renderBoardDetail(); });
   try{
     const [rk, rm] = await Promise.all([
-      fetch(`/api/boards/kline?code=${encodeURIComponent(bcode)}&period=${bperiod2}&days=${KP[bperiod2].days}`),
-      fetch(`/api/boards/members?code=${encodeURIComponent(bcode)}`)]);
-    if(rk.ok){ const k = await rk.json(); if(k.bars.length) drawKline(k.bars, '#bkchart', '#bktip'); }
+      hasKline ? fetch(`/api/boards/kline?code=${encodeURIComponent(bcode)}&period=${bperiod2}&days=${KP[bperiod2].days}`)
+               : Promise.resolve(null),
+      fetch(`/api/boards/members?code=${encodeURIComponent(bcode)}&market=${bmarket}`)]);
+    if(rk && rk.ok){ const k = await rk.json(); if(k.bars.length) drawKline(k.bars, '#bkchart', '#bktip'); }
     if(rm.ok){
       const m = await rm.json();
       const rows = m.items.slice(0,20).map(i=>
@@ -710,15 +731,16 @@ async function renderBoardDetail(){
 }
 
 /* ---- 板块对比 ---- */
+const cnSnapItems = () => Object.entries(snap)
+  .filter(([k])=>k.startsWith('cn:')).flatMap(([,s])=>s.items);  // 对比仅A股(有板块指数)
 function renderDatalist(){
-  const all = Object.values(snap).flatMap(s=>s.items);
   const seen = new Set();
-  $('#cmplist').innerHTML = all.filter(i=>!seen.has(i.code)&&seen.add(i.code))
+  $('#cmplist').innerHTML = cnSnapItems().filter(i=>!seen.has(i.code)&&seen.add(i.code))
     .map(i=>`<option value="${i.name}">`).join('');
 }
 $('#cmpinput').addEventListener('change', ()=>{
   const nm = $('#cmpinput').value.trim();
-  const it = Object.values(snap).flatMap(s=>s.items).find(i=>i.name===nm);
+  const it = cnSnapItems().find(i=>i.name===nm);
   if(!it || cmpBoards.some(b=>b.code===it.code) || cmpBoards.length>=6) return;
   cmpBoards.push({code:it.code, name:it.name});
   $('#cmpinput').value='';
