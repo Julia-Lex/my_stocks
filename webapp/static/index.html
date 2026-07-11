@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>财报查询</title>
+<style>
+  :root { --border:#e2e2e2; --muted:#888; --neg:#c0392b; --accent:#2563eb;
+          --up:#d93a3a; --down:#1a9e5c; }
+  * { box-sizing:border-box; }
+  body { font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+         margin:0; background:#f7f7f8; color:#222; }
+  .wrap { max-width:1100px; margin:0 auto; padding:24px 16px 60px; }
+  h1 { font-size:20px; margin:0 0 16px; }
+  h1 .sub { font-weight:400; font-size:13px; color:var(--muted); }
+  #err { display:none; background:#fdecea; color:var(--neg); padding:10px 14px;
+         border-radius:8px; margin-bottom:12px; }
+  /* 搜索 */
+  .searchbox { position:relative; max-width:480px; }
+  #q { width:100%; padding:10px 14px; font-size:16px; border:1px solid var(--border);
+       border-radius:10px; outline:none; }
+  #q:focus { border-color:var(--accent); }
+  #sug { position:absolute; top:100%; left:0; right:0; z-index:10; background:#fff;
+         border:1px solid var(--border); border-radius:10px; margin-top:4px;
+         box-shadow:0 4px 16px rgba(0,0,0,.08); display:none; overflow:hidden; }
+  .sug-item { padding:9px 14px; cursor:pointer; display:flex; gap:8px; align-items:center; }
+  .sug-item:hover { background:#f0f4ff; }
+  .sug-item.dim { color:var(--muted); }
+  .badge { font-size:11px; padding:1px 7px; border-radius:99px; background:#eef;
+           color:var(--accent); flex:none; }
+  .sug-item .code { color:var(--muted); font-size:13px; margin-left:auto; }
+  /* 头部与顶层视图 tab */
+  #head { margin:22px 0 10px; font-size:17px; font-weight:600; }
+  #head .sub { font-weight:400; color:var(--muted); font-size:13px; margin-left:8px; }
+  .vtabs { display:flex; gap:8px; margin:0 0 16px; }
+  .vtab { padding:7px 20px; border:1px solid var(--border); border-radius:99px;
+          background:#fff; cursor:pointer; font-size:14px; }
+  .vtab.on { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  /* 摘要/基本面卡片 */
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+           gap:10px; margin-bottom:22px; }
+  .card { background:#fff; border:1px solid var(--border); border-radius:12px; padding:12px 14px; }
+  .card .lbl { font-size:12px; color:var(--muted); }
+  .card .val { font-size:19px; font-weight:650; margin-top:4px; }
+  .card .val.neg { color:var(--neg); }
+  .card .val .yoy { font-size:12px; font-weight:400; color:var(--muted); margin-left:4px; }
+  .sec { font-size:14px; font-weight:600; margin:18px 0 8px; color:#444;
+         display:flex; align-items:center; gap:8px; }
+  .sec .note-inline { font-weight:400; font-size:12px; color:var(--muted); }
+  .ptabs { display:inline-flex; gap:4px; margin-left:4px; }
+  .ptab { padding:3px 14px; border:1px solid var(--border); border-radius:99px;
+          background:#fff; cursor:pointer; font-size:12.5px; font-weight:400; }
+  .ptab.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  /* 频率单选 */
+  .freq { display:flex; gap:14px; align-items:center; margin:0 0 12px; font-size:14px; }
+  .freq label { cursor:pointer; display:flex; gap:4px; align-items:center; }
+  .freq .hint { color:var(--muted); font-size:12px; }
+  /* 报表 tab + 表格 */
+  .tabs { display:flex; gap:6px; margin-bottom:-1px; }
+  .tab { padding:8px 18px; border:1px solid var(--border); border-bottom:none;
+         border-radius:10px 10px 0 0; background:#efefef; cursor:pointer; font-size:14px; }
+  .tab.on { background:#fff; font-weight:600; }
+  .panel { background:#fff; border:1px solid var(--border); border-radius:0 12px 12px 12px;
+           padding:14px; overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:13.5px; }
+  th, td { padding:7px 12px; border-bottom:1px solid #f0f0f0; text-align:right;
+           white-space:nowrap; }
+  th:first-child, td:first-child { text-align:left; position:sticky; left:0; background:#fff; }
+  thead th { color:var(--muted); font-weight:500; border-bottom:1px solid var(--border); }
+  td.neg { color:var(--neg); }
+  .pct { color:var(--muted); font-size:11px; margin-left:3px; }
+  #expand { margin-top:10px; background:none; border:none; color:var(--accent);
+            cursor:pointer; font-size:13.5px; padding:4px 0; }
+  .note { color:var(--muted); font-size:13px; padding:30px 0; text-align:center; }
+  /* K线 */
+  .kwrap { position:relative; background:#fff; border:1px solid var(--border);
+           border-radius:12px; padding:14px; }
+  #kchart { width:100%; height:420px; display:block; cursor:crosshair; }
+  #ktip { position:absolute; display:none; pointer-events:none; background:rgba(20,20,20,.85);
+          color:#fff; font-size:12px; padding:6px 9px; border-radius:8px; z-index:5;
+          white-space:nowrap; line-height:1.6; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>财报查询 <span class="sub">A股 · 港股 · 美股</span></h1>
+  <div id="err"></div>
+  <div class="searchbox">
+    <input id="q" placeholder="输入名字或代码,如:旭创 / 300308(港美股用代码或英文名,如 00700 / TENCENT)" autocomplete="off">
+    <div id="sug"></div>
+  </div>
+  <div id="content"></div>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const MK = { cn:'A股', hk:'港股', us:'美股' };
+const CUR = { CNY:'人民币', HKD:'港元', USD:'美元' };
+let cur = null;          // statements 响应(无财报时为 null)
+let curStock = null;     // 当前选中的股票 {market, code, name}
+let quote = null;        // {fund, klines:{day|week|month:...}} 行情缓存,选股时清空
+let kperiod = 'day';     // K线周期
+const KP = { day:{label:'日K', days:250, span:'近一年'},
+             week:{label:'周K', days:260, span:'近5年'},
+             month:{label:'月K', days:120, span:'近10年'} };
+let view = 'stmt';       // stmt=财务报表 | quote=个股行情
+let tab = 'income';
+let expanded = false;
+let freq = 'annual';     // annual=年度(默认,近5年年报) | quarterly=季度
+let showYoy = false;     // 同比:对比上一年同期
+let showQoq = false;     // 环比:对比相邻上一期
+
+function err(msg){ const e=$('#err'); e.textContent=msg||''; e.style.display=msg?'block':'none'; }
+
+/* ---------- 搜索 ---------- */
+let timer=null;
+$('#q').addEventListener('input', e => {
+  clearTimeout(timer);
+  const q = e.target.value.trim();
+  if(!q){ $('#sug').style.display='none'; return; }
+  timer = setTimeout(()=>doSearch(q), 300);
+});
+async function doSearch(q){
+  try{
+    const r = await fetch('/api/search?q='+encodeURIComponent(q));
+    if(!r.ok) throw new Error('搜索失败 HTTP '+r.status);
+    renderSug(await r.json());
+  }catch(ex){ err(ex.message); }
+}
+function renderSug(items){
+  const box = $('#sug');
+  box.innerHTML = '';
+  if(!items.length) box.innerHTML='<div class="sug-item dim">无匹配</div>';
+  items.forEach(it=>{
+    const d = document.createElement('div');
+    d.className = 'sug-item' + (it.has_statements?'':' dim');
+    d.innerHTML = `<span class="badge">${MK[it.market]}</span><span>${it.name}</span>` +
+      (it.has_statements?'':'<span style="font-size:12px">(无财报)</span>') +
+      `<span class="code">${it.code}</span>`;
+    d.onclick = ()=>{ box.style.display='none'; $('#q').value=`${it.name} ${it.code}`; pick(it); };
+    box.appendChild(d);
+  });
+  box.style.display='block';
+}
+document.addEventListener('click', e=>{ if(!e.target.closest('.searchbox')) $('#sug').style.display='none'; });
+
+/* ---------- 选股与加载 ---------- */
+function pick(it){ curStock=it; quote=null; cur=null; tab='income'; expanded=false; loadStmt(); }
+
+async function loadStmt(keepView){
+  err('');
+  if(!keepView) $('#content').innerHTML = '<div class="note">加载中…</div>';
+  try{
+    const r = await fetch(`/api/statements?market=${curStock.market}&code=${encodeURIComponent(curStock.code)}&freq=${freq}`);
+    cur = (r.status===404) ? null : (r.ok ? await r.json() : (()=>{throw new Error('查询失败 HTTP '+r.status)})());
+    render();
+  }catch(ex){ err(ex.message); $('#content').innerHTML=''; }
+}
+
+/* ---------- 格式化 ---------- */
+// 过长科目的显示别名(仅显示,数据键不变)
+const ALIAS = { '归属于母公司所有者的净利润':'归母净利润',
+                '归属母公司净利润':'归母净利润',
+                '归属于母公司股东净利润':'归母净利润' };
+const label = k => ALIAS[k] || k;
+const isPerShare = k => k.includes('每股') || k.includes('股息') || k.includes('派息');
+function fmt(v, item){
+  if(v===null || v===undefined) return '—';
+  if(item==='资产负债率') return v.toFixed(2)+'%';
+  if(isPerShare(item)) return v.toFixed(4).replace(/0+$/,'').replace(/\.$/,'');
+  return (v/1e8).toLocaleString('zh-CN',{maximumFractionDigits:2});  // 亿
+}
+const fnum = (v,d=2) => (v===null||v===undefined) ? '—' : Number(v).toLocaleString('zh-CN',{maximumFractionDigits:d});
+const fyi = (v) => (v===null||v===undefined) ? '' : `<span class="yoy">(${v>=0?'+':''}${Number(v).toFixed(1)}%)</span>`;
+
+/* ---------- 顶层渲染 ---------- */
+function render(){
+  const s = curStock;
+  const sub = [`${s.code} · ${MK[s.market]}`];
+  if(view==='stmt' && cur) sub.push(`币种:${CUR[cur.currency]||cur.currency||'未知'}`, `最新报告期:${cur.latest_period}`);
+  $('#content').innerHTML = `
+    <div id="head">${s.name} <span class="sub">${sub.join(' · ')}</span></div>
+    <div class="vtabs">
+      <div class="vtab${view==='stmt'?' on':''}" data-v="stmt">财务报表</div>
+      <div class="vtab${view==='quote'?' on':''}" data-v="quote">个股行情</div>
+    </div>
+    <div id="view"></div>`;
+  document.querySelectorAll('.vtab').forEach(t=>t.onclick=()=>{ view=t.dataset.v; render(); });
+  view==='stmt' ? renderStmt() : renderQuote();
+}
+
+/* ---------- 财务报表视图 ---------- */
+function renderStmt(){
+  if(!cur){
+    $('#view').innerHTML = '<div class="note">该股票暂无财报数据(数据库目前仅覆盖部分港/美股财报)</div>';
+    return;
+  }
+  const cards = cur.summary.map(s=>{
+    const v = fmt(s.value, s.label);
+    const suffix = (s.label==='资产负债率'||isPerShare(s.label)||s.value==null) ? '' : ' 亿';
+    return `<div class="card"><div class="lbl">${s.label}</div>
+      <div class="val${s.value<0?' neg':''}">${v}${suffix}</div></div>`;
+  }).join('');
+  $('#view').innerHTML = `
+    <div class="cards">${cards}</div>
+    <div class="freq">
+      <label><input type="radio" name="freq" value="annual"${freq==='annual'?' checked':''}>年度(近5年年报)</label>
+      <label><input type="radio" name="freq" value="quarterly"${freq==='quarterly'?' checked':''}>季度(近5年各报告期)</label>
+      <label><input type="checkbox" id="yoy"${showYoy?' checked':''}>同比</label>
+      <label><input type="checkbox" id="qoq"${showQoq?' checked':''}>环比</label>
+      ${freq==='quarterly' && cur.market==='cn'
+        ? '<span class="hint">注:A股季报的利润表/现金流量表为年初至报告期的累计值</span>' : ''}
+    </div>
+    <div class="tabs">
+      ${[['income','利润表'],['balance','资产负债表'],['cashflow','现金流量表']]
+        .map(([k,l])=>`<div class="tab${k===tab?' on':''}" data-t="${k}">${l}</div>`).join('')}
+    </div>
+    <div class="panel"><div id="tbl"></div>
+      <button id="expand"></button></div>`;
+  document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{ tab=t.dataset.t; renderStmt(); });
+  document.querySelectorAll('input[name=freq]').forEach(rd=>rd.onchange=()=>{
+    freq = rd.value; loadStmt(true);
+  });
+  $('#yoy').onchange = e=>{ showYoy=e.target.checked; renderTable(); };
+  $('#qoq').onchange = e=>{ showQoq=e.target.checked; renderTable(); };
+  renderTable();
+}
+
+function renderTable(){
+  const block = cur.statements[tab];
+  const rows = expanded ? block.rows
+                        : block.rows.filter(r=>block.key_items.includes(r.item));
+  const periods = [...cur.periods].reverse();   // 从左到右 = 从新到旧
+  const asc = cur.periods;                      // 升序,供环比找相邻上一期
+  const pct = (v, prev) => (v==null || prev==null || prev===0) ? null
+    : ((v-prev)/Math.abs(prev)*100).toFixed(1).replace(/^(?!-)/,'+')+'%';
+  const head = `<tr><th>科目(单位:亿,每股类除外)</th>` +
+    periods.map(p=>`<th>${p}</th>`).join('') + '</tr>';
+  const body = rows.map(r=>'<tr><td>'+label(r.item)+'</td>'+periods.map(p=>{
+      const v = r.values[p];
+      const parts = [];
+      if(showYoy){
+        const y = pct(v, r.values[p.replace(/^\d{4}/, s=>s-1)]);   // 上一年同期
+        if(y!==null) parts.push((showQoq?'同比':'')+y);
+      }
+      if(showQoq){
+        const i = asc.indexOf(p);
+        const q = i>0 ? pct(v, r.values[asc[i-1]]) : null;         // 相邻上一期
+        if(q!==null) parts.push((showYoy?'环比':'')+q);
+      }
+      const tail = parts.length ? `<span class="pct">(${parts.join(', ')})</span>` : '';
+      return `<td${v<0?' class="neg"':''}>${fmt(v, r.item)}${tail}</td>`;
+    }).join('')+'</tr>').join('');
+  $('#tbl').innerHTML = rows.length
+    ? `<table><thead>${head}</thead><tbody>${body}</tbody></table>`
+    : '<div class="note">本报表无数据</div>';
+  const btn = $('#expand');
+  btn.textContent = expanded ? '收起,只看关键科目' : `展开全部科目(共 ${block.rows.length} 项)`;
+  btn.onclick = ()=>{ expanded=!expanded; renderTable(); };
+}
+
+/* ---------- 个股行情视图 ---------- */
+async function renderQuote(){
+  const qs = `market=${curStock.market}&code=${encodeURIComponent(curStock.code)}`;
+  if(!quote){
+    $('#view').innerHTML = '<div class="note">加载中…</div>';
+    try{
+      const [rf, rk] = await Promise.all([
+        fetch('/api/fundamental?'+qs),
+        fetch(`/api/kline?${qs}&days=${KP[kperiod].days}&period=${kperiod}`)]);
+      quote = { fund: rf.ok ? await rf.json() : null, klines: {} };
+      if(rk.ok) quote.klines[kperiod] = await rk.json();
+    }catch(ex){ err(ex.message); return; }
+    if(view!=='quote') return;   // 加载期间用户已切走
+  }
+  if(quote.klines[kperiod] === undefined){   // 切周期,按需拉取并缓存
+    try{
+      const rk = await fetch(`/api/kline?${qs}&days=${KP[kperiod].days}&period=${kperiod}`);
+      quote.klines[kperiod] = rk.ok ? await rk.json() : null;
+    }catch(ex){ err(ex.message); return; }
+    if(view!=='quote') return;
+  }
+  const f = quote.fund;
+  let html = '';
+  if(f){
+    const v = f.valuation, i = f.indicator;
+    if(f.industry) html += `<div class="sec">基本面 <span class="note-inline">行业:${f.industry}</span></div>`;
+    else html += `<div class="sec">基本面</div>`;
+    if(v){
+      html += `<div class="cards">
+        <div class="card"><div class="lbl">市盈率 PE(TTM)</div><div class="val">${fnum(v.pe_ttm)}</div></div>
+        <div class="card"><div class="lbl">市净率 PB</div><div class="val">${fnum(v.pb)}</div></div>
+        <div class="card"><div class="lbl">市销率 PS(TTM)</div><div class="val">${fnum(v.ps_ttm)}</div></div>
+        <div class="card"><div class="lbl">股息率</div><div class="val">${v.dv_ratio==null?'—':fnum(v.dv_ratio)+'%'}</div></div>
+        <div class="card"><div class="lbl">总市值</div><div class="val">${fnum(v.total_mv/1e8,0)} 亿</div></div>
+        <div class="card"><div class="lbl">估值日期</div><div class="val" style="font-size:15px">${v.trade_date}</div></div>
+      </div>`;
+    }
+    if(i){
+      html += `<div class="cards">
+        <div class="card"><div class="lbl">ROE</div><div class="val">${i.roe==null?'—':fnum(i.roe)+'%'}</div></div>
+        <div class="card"><div class="lbl">毛利率</div><div class="val">${i.gross_margin==null?'—':fnum(i.gross_margin)+'%'}</div></div>
+        <div class="card"><div class="lbl">净利率</div><div class="val">${i.net_margin==null?'—':fnum(i.net_margin)+'%'}</div></div>
+        <div class="card"><div class="lbl">每股收益</div><div class="val">${fnum(i.eps,4)}</div></div>
+        <div class="card"><div class="lbl">营业收入</div><div class="val">${i.revenue==null?'—':fnum(i.revenue/1e8,1)+' 亿'}${fyi(i.revenue_yoy)}</div></div>
+        <div class="card"><div class="lbl">净利润</div><div class="val">${i.net_profit==null?'—':fnum(i.net_profit/1e8,1)+' 亿'}${fyi(i.net_profit_yoy)}</div></div>
+        <div class="card"><div class="lbl">资产负债率</div><div class="val">${i.debt_ratio==null?'—':fnum(i.debt_ratio)+'%'}</div></div>
+        <div class="card"><div class="lbl">指标报告期</div><div class="val" style="font-size:15px">${i.report_date}</div></div>
+      </div>`;
+    }
+    if(!v && !i) html += '<div class="note">暂无基本面数据</div>';
+  } else {
+    html += '<div class="note">暂无基本面数据</div>';
+  }
+  const k = quote.klines[kperiod];
+  // 标签显示实际数据范围:新股不足 5/10 年时不误导(如胜宏上市仅 3 个月)
+  const range = k && k.bars.length
+    ? `${k.bars[0].d.slice(0,7)} ~ ${k.bars.at(-1).d.slice(0,7)} · 共${k.bars.length}根(最多${KP[kperiod].span})`
+    : KP[kperiod].span;
+  html += `<div class="sec">K线
+    <span class="ptabs">${Object.entries(KP).map(([p,c]) =>
+      `<span class="ptab${p===kperiod?' on':''}" data-p="${p}">${c.label}</span>`).join('')}</span>
+    <span class="note-inline">${range}${k&&k.adjusted?' · 前复权':''} · 灰色曲线为成交量</span></div>`;
+  html += k && k.bars.length
+    ? `<div class="kwrap"><canvas id="kchart"></canvas><div id="ktip"></div></div>`
+    : '<div class="note">暂无K线数据</div>';
+  $('#view').innerHTML = html;
+  document.querySelectorAll('.ptab').forEach(t=>t.onclick=()=>{ kperiod=t.dataset.p; renderQuote(); });
+  if(k && k.bars.length) drawKline(k.bars);
+}
+
+/* ---------- canvas K线:蜡烛 + 成交量曲线叠加 ---------- */
+function drawKline(bars){
+  const cv = $('#kchart'), dpr = window.devicePixelRatio||1;
+  const W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W*dpr; cv.height = H*dpr;
+  const ctx = cv.getContext('2d'); ctx.scale(dpr,dpr);
+  const padL=8, padR=64, padT=10, padB=22;
+  const w = W-padL-padR, h = H-padT-padB;
+  // 根数少时(新股)固定蜡烛宽度、左侧排列、右侧留白,不拉伸摊满
+  const n = bars.length, step = Math.min(w/n, 18), cw = Math.max(1, step*0.6);
+  const lo = Math.min(...bars.map(b=>b.l)), hi = Math.max(...bars.map(b=>b.h));
+  const m = (hi-lo)*0.05, pLo = lo-m, pHi = hi+m;
+  const vMax = Math.max(...bars.map(b=>b.v));
+  // 从右缘倒排:最新一根贴右侧,数据少时左侧留白(数据满时与正排等价)
+  const x = i => W - padR - (n-i)*step + step/2;
+  const py = p => padT + (pHi-p)/(pHi-pLo)*h;
+  const vy = v => padT + h - (v/vMax)*(h*0.28);   // 成交量占底部 28% 高度
+
+  ctx.clearRect(0,0,W,H);
+  // 横向网格 + 价格刻度
+  ctx.font='11px sans-serif'; ctx.fillStyle='#999'; ctx.strokeStyle='#f0f0f0';
+  for(let g=0; g<=4; g++){
+    const p = pHi-(pHi-pLo)*g/4, y = py(p);
+    ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y); ctx.stroke();
+    ctx.fillText(p.toFixed(2), W-padR+6, y+4);
+  }
+  // 日期刻度(约 6 个)
+  // 刻度间隔:既不超过 6 个,也保证相邻标签 ≥70px 不重叠(根数少、蜡烛定宽时)
+  const dstep = Math.max(Math.ceil(n/6), Math.ceil(70/step));
+  for(let i=0; i<n; i+=dstep){
+    const xx = x(i);
+    ctx.textAlign = xx > 32 ? 'center' : 'left';     // 首根贴左缘时左对齐,避免被裁掉
+    ctx.fillText(bars[i].d.slice(2), xx > 32 ? xx : padL, H-6);
+  }
+  ctx.textAlign='left';
+  // 成交量:半透明面积 + 曲线(画在蜡烛之下)
+  ctx.beginPath(); ctx.moveTo(x(0), padT+h);
+  bars.forEach((b,i)=>ctx.lineTo(x(i), vy(b.v)));
+  ctx.lineTo(x(n-1), padT+h); ctx.closePath();
+  ctx.fillStyle='rgba(120,120,130,.14)'; ctx.fill();
+  ctx.beginPath();
+  bars.forEach((b,i)=>i?ctx.lineTo(x(i),vy(b.v)):ctx.moveTo(x(0),vy(b.v)));
+  ctx.strokeStyle='rgba(120,120,130,.55)'; ctx.lineWidth=1; ctx.stroke();
+  // 蜡烛
+  bars.forEach((b,i)=>{
+    const up = b.c >= b.o, col = up ? getCss('--up') : getCss('--down');
+    ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1;
+    const xc = x(i);
+    ctx.beginPath(); ctx.moveTo(xc, py(b.h)); ctx.lineTo(xc, py(b.l)); ctx.stroke();
+    const yo = py(b.o), yc = py(b.c);
+    const top = Math.min(yo,yc), bh = Math.max(1, Math.abs(yo-yc));
+    if(up){ ctx.fillStyle='#fff'; ctx.fillRect(xc-cw/2, top, cw, bh);
+            ctx.strokeRect(xc-cw/2, top, cw, bh); }
+    else  { ctx.fillRect(xc-cw/2, top, cw, bh); }
+  });
+  // 最新收盘标注
+  const last = bars[n-1];
+  ctx.fillStyle = last.c>=last.o ? getCss('--up') : getCss('--down');
+  ctx.fillRect(W-padR+2, py(last.c)-9, padR-4, 16);
+  ctx.fillStyle='#fff'; ctx.fillText(last.c.toFixed(2), W-padR+6, py(last.c)+4);
+
+  // 悬浮提示
+  const tip = $('#ktip');
+  cv.onmousemove = e=>{
+    const rect = cv.getBoundingClientRect();
+    const i = Math.min(n-1, Math.max(0, Math.floor((e.clientX-rect.left-padL)/step)));
+    const b = bars[i];
+    tip.style.display='block';
+    tip.style.left = Math.min(e.clientX-rect.left+14, W-170)+'px';
+    tip.style.top  = (e.clientY-rect.top+14)+'px';
+    tip.innerHTML = `${b.d}<br>开 ${b.o} 高 ${b.h}<br>低 ${b.l} 收 ${b.c}<br>量 ${(b.v/1e4).toFixed(1)} 万股`;
+  };
+  cv.onmouseleave = ()=>{ tip.style.display='none'; };
+}
+const getCss = k => getComputedStyle(document.documentElement).getPropertyValue(k).trim();
+window.addEventListener('resize', ()=>{ const k=quote?.klines?.[kperiod];
+  if(view==='quote' && k?.bars?.length && $('#kchart')) drawKline(k.bars); });
+</script>
+</body>
+</html>
