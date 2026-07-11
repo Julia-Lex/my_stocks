@@ -61,7 +61,37 @@ def update_reference(conn, market: str):
         except Exception as exc:  # noqa: BLE001
             c.log.warning("指数 %s 更新失败: %s", idx, exc)
     c.rebuild_intl_calendar(conn, market)
+    _patch_calendar_from_proxy(conn, market)
     return stocks
+
+
+# 日历代理探测:新浪指数发布延迟 >2 小时,收盘当晚 18:05 运行时日历不知道
+# "今天开过市",全市场被缺口检测跳过——碰上周五更放大成 T+3(周一晚才补)。
+# 而腾讯(价格源本尊)当晚就有定盘 K 线。取一只高流动代理股近 14 天的实际
+# 交易日并进日历,消灭"知情权落后于数据权"的延迟(2026-07-11 用户点名修复)。
+_CAL_PROXY = {"hk": "00700", "us": "105.AAPL"}
+
+
+def _patch_calendar_from_proxy(conn, market: str) -> None:
+    try:
+        start = (date.today() - timedelta(days=14)).strftime("%Y%m%d")
+        df = c.fetch_intl_daily(market, _CAL_PROXY[market], start=start)
+        if df.empty:
+            return
+        p = c.MARKETS[market]["prefix"]
+        n = 0
+        with conn.cursor() as cur:
+            for d in df["trade_date"].tolist():
+                cur.execute(
+                    f"INSERT INTO {p}trade_calendar (trade_date, is_open) VALUES (%s, TRUE) "
+                    f"ON CONFLICT (trade_date) DO NOTHING", (d,))
+                n += cur.rowcount
+        conn.commit()
+        if n:
+            c.log.info("[%s] 日历代理探测补入 %d 个交易日(腾讯 %s)", market, n, _CAL_PROXY[market])
+    except Exception as exc:  # noqa: BLE001
+        c.log.warning("[%s] 日历代理探测失败(不影响主流程,回退新浪日历): %s",
+                      market, str(exc)[:60])
 
 
 def make_updater(market: str, task: str, lookback_days: int):
