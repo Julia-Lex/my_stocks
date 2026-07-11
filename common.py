@@ -1863,9 +1863,13 @@ def _fetch_board_daily_futu(board_code: str, start: str) -> pd.DataFrame:
     # 富途列名: time_key/open/close/high/low/volume(股)/turnover(成交额,元)/
     # turnover_rate(换手率%)/change_rate(涨跌幅%)
     start_iso = f"{start[:4]}-{start[4:6]}-{start[6:8]}" if len(start) == 8 else start
-    df = with_retry(_futu_history_kline, board_code, start_iso, retries=3)
-    if df is None or df.empty:
-        return pd.DataFrame()
+    try:
+        df = with_retry(_futu_history_kline, board_code, start_iso, retries=3)
+    except RuntimeError as exc:
+        if "未知股票" in str(exc):   # 列表里存在但无配套指数的特殊板块(实测 5 个)
+            log.warning("%s: 富途无板块指数,日线按空处理", board_code)
+            return pd.DataFrame()
+        raise
     df = df.rename(columns={"time_key": "trade_date", "turnover": "amount",
                             "turnover_rate": "turnover", "change_rate": "pct_chg"})
     keep = ["trade_date", "open", "high", "low", "close", "volume", "amount", "pct_chg", "turnover"]

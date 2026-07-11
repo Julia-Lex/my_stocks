@@ -30,7 +30,7 @@ CREATE INDEX IF NOT EXISTS idx_board_member_open  ON board_member (board_code) W
 CREATE TABLE IF NOT EXISTS board_daily (
     board_code  TEXT NOT NULL REFERENCES board(board_code),
     trade_date  DATE NOT NULL,
-    open  NUMERIC(12,3), high NUMERIC(12,3), low NUMERIC(12,3), close NUMERIC(12,3),
+    open  NUMERIC(18,3), high NUMERIC(18,3), low NUMERIC(18,3), close NUMERIC(18,3),  -- 富途个别特殊板块点位超 10^9,放宽
     volume BIGINT,                          -- 股(源为手,入库 ×100)
     amount NUMERIC(20,2),                   -- 元
     pct_chg  NUMERIC(8,4),
