@@ -69,6 +69,31 @@ ASTOCK_DB_USER=zhu .venv/bin/python 03_daily_update.py
 0 18 * * 1-5  cd /path/to/my_stocks && ASTOCK_DB_USER=zhu ASTOCK_DB_PASSWORD='xxx' .venv/bin/python 03_daily_update.py >> update.log 2>&1
 ```
 
+## 定时任务总表(生效快照 2026-07-11)
+
+唯一事实源是系统 crontab(`crontab -l`);本表为其快照,换机重装照抄即可。
+
+```cron
+# 美股日线(腾讯):周二~六 09:00,拉前一交易日;指数行(新浪)周六常晚半天,自愈
+0 9 * * 2-6   cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu ASTOCK_INTL_SOURCE=tx .venv/bin/python 06_daily_update_intl.py --market us >> update_us.log 2>&1
+# A股日线(东财):工作日 18:00
+0 18 * * 1-5  cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 03_daily_update.py >> update.log 2>&1
+# 港股日线(腾讯):18:05,当晚到位(日历腾讯代理探测)
+5 18 * * 1-5  cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu ASTOCK_INTL_SOURCE=tx .venv/bin/python 06_daily_update_intl.py --market hk >> update_hk.log 2>&1
+# A股分钟线(通达信):18:30 ⚠️ 历史仅约3个月,长期断档不可补
+30 18 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 07_minute_update.py >> update_minute.log 2>&1
+# A股基本面:18:40(估值日更+披露季核查)
+40 18 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 10_fundamental_update.py >> update_fund.log 2>&1
+# 富途四连链:18:50 港基本面→美基本面→指数成分diff→港美板块diff ⚠️ 依赖 FutuOpenD 常驻
+50 18 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 13_fundamental_update_intl.py --market hk >> update_fund_hk.log 2>&1 && ASTOCK_DB_USER=zhu .venv/bin/python 13_fundamental_update_intl.py --market us >> update_fund_us.log 2>&1 && ASTOCK_DB_USER=zhu .venv/bin/python 17_index_member_intl.py >> update_idxmember.log 2>&1 && ASTOCK_DB_USER=zhu .venv/bin/python 19_board_intl.py >> update_board_intl.log 2>&1
+# 事件数据:19:00(龙虎榜近5日+披露季预告/快报;北向已终结默认跳过)
+0 19 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 15_events_update.py >> update_events.log 2>&1
+# 周全量备份:周日 03:00(本地3份轮换 + rsync NAS,脚本带未挂载守卫)
+0 3 * * 0 /Users/zhu/backups/astock/backup_astock.sh >> /Users/zhu/backups/astock/backup.log 2>&1
+```
+
+注:A股板块日更(13_board_update.py)由板块会话负责,截至本快照未挂 cron。各章节内的 cron 示例以本表为准。
+
 ## 常用查询
 
 ```sql
