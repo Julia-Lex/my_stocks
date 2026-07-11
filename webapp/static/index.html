@@ -312,10 +312,14 @@ async function renderQuote(){
     html += '<div class="note">暂无基本面数据</div>';
   }
   const k = quote.klines[kperiod];
+  // 标签显示实际数据范围:新股不足 5/10 年时不误导(如胜宏上市仅 3 个月)
+  const range = k && k.bars.length
+    ? `${k.bars[0].d.slice(0,7)} ~ ${k.bars.at(-1).d.slice(0,7)} · 共${k.bars.length}根(最多${KP[kperiod].span})`
+    : KP[kperiod].span;
   html += `<div class="sec">K线
     <span class="ptabs">${Object.entries(KP).map(([p,c]) =>
       `<span class="ptab${p===kperiod?' on':''}" data-p="${p}">${c.label}</span>`).join('')}</span>
-    <span class="note-inline">${KP[kperiod].span}${k&&k.adjusted?' · 前复权':''} · 灰色曲线为成交量</span></div>`;
+    <span class="note-inline">${range}${k&&k.adjusted?' · 前复权':''} · 灰色曲线为成交量</span></div>`;
   html += k && k.bars.length
     ? `<div class="kwrap"><canvas id="kchart"></canvas><div id="ktip"></div></div>`
     : '<div class="note">暂无K线数据</div>';
@@ -332,7 +336,8 @@ function drawKline(bars){
   const ctx = cv.getContext('2d'); ctx.scale(dpr,dpr);
   const padL=8, padR=64, padT=10, padB=22;
   const w = W-padL-padR, h = H-padT-padB;
-  const n = bars.length, step = w/n, cw = Math.max(1, step*0.6);
+  // 根数少时(新股)固定蜡烛宽度、左侧排列、右侧留白,不拉伸摊满
+  const n = bars.length, step = Math.min(w/n, 18), cw = Math.max(1, step*0.6);
   const lo = Math.min(...bars.map(b=>b.l)), hi = Math.max(...bars.map(b=>b.h));
   const m = (hi-lo)*0.05, pLo = lo-m, pHi = hi+m;
   const vMax = Math.max(...bars.map(b=>b.v));
@@ -349,9 +354,13 @@ function drawKline(bars){
     ctx.fillText(p.toFixed(2), W-padR+6, y+4);
   }
   // 日期刻度(约 6 个)
-  const dstep = Math.ceil(n/6);
-  ctx.textAlign='center';
-  for(let i=0; i<n; i+=dstep) if(x(i)>32) ctx.fillText(bars[i].d.slice(2), x(i), H-6);
+  // 刻度间隔:既不超过 6 个,也保证相邻标签 ≥70px 不重叠(根数少、蜡烛定宽时)
+  const dstep = Math.max(Math.ceil(n/6), Math.ceil(70/step));
+  for(let i=0; i<n; i+=dstep){
+    const xx = x(i);
+    ctx.textAlign = xx > 32 ? 'center' : 'left';     // 首根贴左缘时左对齐,避免被裁掉
+    ctx.fillText(bars[i].d.slice(2), xx > 32 ? xx : padL, H-6);
+  }
   ctx.textAlign='left';
   // 成交量:半透明面积 + 曲线(画在蜡烛之下)
   ctx.beginPath(); ctx.moveTo(x(0), padT+h);

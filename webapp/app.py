@@ -295,16 +295,16 @@ def kline(market: Literal["cn", "hk", "us"], code: str = Query(..., max_length=1
                 fi += 1
             f = (float(factors[fi][1]) / latest_f) if (adjusted and fi >= 0) else 1.0
             bars.append({"d": d.isoformat(),
-                         "o": round(float(o) * f, 3), "h": round(float(h) * f, 3),
-                         "l": round(float(l) * f, 3), "c": round(float(c) * f, 3),
+                         "o": round(float(o) * f, 6), "h": round(float(h) * f, 6),
+                         "l": round(float(l) * f, 6), "c": round(float(c) * f, 6),
                          "v": int(v) if v is not None else 0})
     else:
         # 物化视图已是后复权价:除以最新因子即前复权
         f = 1.0 / latest_f
         for d, o, h, l, c, v in price_rows:
             bars.append({"d": d.isoformat(),
-                         "o": round(float(o) * f, 3), "h": round(float(h) * f, 3),
-                         "l": round(float(l) * f, 3), "c": round(float(c) * f, 3),
+                         "o": round(float(o) * f, 6), "h": round(float(h) * f, 6),
+                         "l": round(float(l) * f, 6), "c": round(float(c) * f, 6),
                          "v": int(v) if v is not None else 0})
     return {"code": code, "market": market, "adjusted": adjusted,
             "period": period, "bars": bars}

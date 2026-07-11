@@ -79,13 +79,15 @@ CREATE TABLE IF NOT EXISTS hk_index_daily (
 
 -- hk_adj_factor 是稀疏表(仅除权除息日有行),同 A 股改为前向填充(见
 -- 01_schema.sql 顶部说明),查不到因子记为 1。
+-- 精度 6 位:合股型仙股(如 00661.HK,因子 0.0075)hfq 价可低至 1e-4,
+-- 3 位小数会舍成 0 并固化进周/月物化视图(2026-07-11 实测)
 CREATE OR REPLACE VIEW hk_daily_price_hfq AS
 SELECT
     d.stock_code, d.trade_date,
-    round(d.open  * f.factor, 3) AS open,
-    round(d.high  * f.factor, 3) AS high,
-    round(d.low   * f.factor, 3) AS low,
-    round(d.close * f.factor, 3) AS close,
+    round(d.open  * f.factor, 6) AS open,
+    round(d.high  * f.factor, 6) AS high,
+    round(d.low   * f.factor, 6) AS low,
+    round(d.close * f.factor, 6) AS close,
     d.volume, d.amount, d.pct_chg, d.turnover
 FROM hk_daily_price d
 LEFT JOIN LATERAL (
@@ -224,13 +226,14 @@ CREATE TABLE IF NOT EXISTS us_index_daily (
 
 -- us_adj_factor 是稀疏表(仅除权除息日有行),同 A 股改为前向填充(见
 -- 01_schema.sql 顶部说明),查不到因子记为 1。
+-- 精度 6 位:理由同 hk_daily_price_hfq(防合股仙股舍成 0)
 CREATE OR REPLACE VIEW us_daily_price_hfq AS
 SELECT
     d.stock_code, d.trade_date,
-    round(d.open  * f.factor, 3) AS open,
-    round(d.high  * f.factor, 3) AS high,
-    round(d.low   * f.factor, 3) AS low,
-    round(d.close * f.factor, 3) AS close,
+    round(d.open  * f.factor, 6) AS open,
+    round(d.high  * f.factor, 6) AS high,
+    round(d.low   * f.factor, 6) AS low,
+    round(d.close * f.factor, 6) AS close,
     d.volume, d.amount, d.pct_chg, d.turnover
 FROM us_daily_price d
 LEFT JOIN LATERAL (

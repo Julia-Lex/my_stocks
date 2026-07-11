@@ -178,6 +178,14 @@ def test_kline_week_month():
         assert abs(last["c"] - day["bars"][-1]["c"]) / day["bars"][-1]["c"] < 0.05
 
 
+def test_kline_penny_stock_not_rounded_to_zero():
+    # 00661.HK 复权后价格 <0.001,3 位小数舍入会变 0(2026-07-11 实测缺陷)
+    r = client.get("/api/kline", params={"market": "hk", "code": "00661.HK",
+                                         "period": "week", "days": 260})
+    assert r.status_code == 200
+    assert all(b["c"] > 0 and b["o"] > 0 for b in r.json()["bars"])
+
+
 def test_kline_bad_period():
     r = client.get("/api/kline", params={"market": "cn", "code": "300308.SZ",
                                          "period": "hour"})
