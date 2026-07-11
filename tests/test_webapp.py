@@ -357,6 +357,18 @@ def test_boards_fundflow():
                       params={"btype": "industry", "period": "3d"}).status_code == 422
 
 
+def test_boards_fundflow_hk_us_structure():
+    """港美资金流:结构可用;数值断言待回填完成(链式任务)后自然生效。"""
+    for market in ("hk", "us"):
+        r = client.get("/api/boards/fundflow",
+                       params={"btype": "industry", "market": market})
+        assert r.status_code == 200
+        d = r.json()
+        assert isinstance(d["items"], list)
+        for it in d["items"][:3]:
+            assert it["code"] and it["members"] >= it["covered"] >= 0
+
+
 def test_boards_compare():
     r0 = client.get("/api/boards/snapshot", params={"btype": "industry"})
     codes = [i["code"] for i in r0.json()["items"][:2]]

@@ -544,12 +544,11 @@ async function loadBoards(){
     const s = snap[sk()];
     $('#bdate').textContent = `数据日期:${s.date}` +
       (bmarket==='cn' ? '' : ' · 港美板块指标由成员股现算(等权涨跌幅,成交额为收盘×量近似)');
-    // 港美无板块指数/个股资金流,对比与资金流区不可用
+    // 港美无板块指数,对比区不可用;资金流三市场均可(富途个股聚合)
     $('#cmpsec').style.display = bmarket==='cn' ? 'block' : 'none';
-    $('#ffsec').style.display = bmarket==='cn' ? 'block' : 'none';
     renderTctrl();
     await updateTreemap();
-    if(bmarket==='cn') renderFundflow();
+    renderFundflow();
     renderRanks(s.items);
     renderDatalist();
     if(!calCache[sk()]){
@@ -746,10 +745,10 @@ async function renderFundflow(){
   $('#ffperiod').innerHTML = FFPERIODS.map(([v,l])=>
     `<span class="ptab${v===ffPeriod?' on':''}" data-v="${v}">${l}</span>`).join('');
   document.querySelectorAll('#ffperiod .ptab').forEach(t=>t.onclick=()=>{ ffPeriod=t.dataset.v; renderFundflow(); });
-  const key = `${btype}:${ffPeriod}`;
+  const key = `${sk()}:${ffPeriod}`;
   try{
     if(!ffCache[key]){
-      const r = await fetch(`/api/boards/fundflow?btype=${btype}&period=${ffPeriod}`);
+      const r = await fetch(`/api/boards/fundflow?btype=${btype}&period=${ffPeriod}&market=${bmarket}`);
       if(!r.ok) throw new Error('资金流加载失败 HTTP '+r.status);
       ffCache[key] = await r.json();
     }
@@ -758,8 +757,11 @@ async function renderFundflow(){
   const valid = d.items.filter(i=>i.main_net!==null);
   const rows = [...valid.slice(0,15), ...valid.slice(-15).filter(i=>!valid.slice(0,15).includes(i))];
   const cov = d.items.reduce((s,i)=>s+i.covered,0) / Math.max(1, d.items.reduce((s,i)=>s+i.members,0));
-  $('#ffnote').textContent = `板块=成员个股聚合(富途源) · ${d.dates[0]}${d.dates.length>1?' ~ '+d.dates.at(-1):''}`+
-    ` · 净流入前15/后15` + (cov<0.98?` · 个股回填中,当前覆盖 ${(cov*100).toFixed(0)}%`:'');
+  const unit = {cn:'人民币', hk:'港元', us:'美元'}[bmarket];
+  $('#ffnote').textContent = valid.length
+    ? `板块=成员个股聚合(富途源,${unit}) · ${d.dates[0]}${d.dates.length>1?' ~ '+d.dates.at(-1):''}`+
+      ` · 净流入前15/后15` + (cov<0.98?` · 个股回填中,当前覆盖 ${(cov*100).toFixed(0)}%`:'')
+    : '该市场个股资金流尚未回填';
   drawFundflow(rows);
 }
 

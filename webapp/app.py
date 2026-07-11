@@ -665,31 +665,44 @@ def boards_members(code: str = Query(..., max_length=24),
 
 @app.get("/api/boards/fundflow")
 def boards_fundflow(btype: Literal["industry", "concept"],
-                    period: Literal["today", "5d", "20d"] = "today"):
-    """板块主力资金流(仅A股):现役成员个股 capital_flow(富途源)按板块求和。
+                    period: Literal["today", "5d", "20d"] = "today",
+                    market: Literal["cn", "hk", "us"] = "cn"):
+    """板块主力资金流:现役成员个股 capital_flow(富途源)按板块求和。
 
-    covered/members 标注成员覆盖度(全量回填期间可能不完整)。
+    日期基准按该市场成员在 capital_flow 中的实际交易日取(三市场日历不同,
+    不能混用)。covered/members 标注成员覆盖度(回填期间可能不完整)。
+    金额单位随市场币种(cn=元 / hk=港元 / us=美元)。
     """
     n_days = {"today": 1, "5d": 5, "20d": 20}[period]
+    if market == "cn":
+        board_t, member_t = "board", "board_member"
+        open_cond = "valid_to IS NULL"
+    else:
+        t = _INTL_BOARD[market]
+        board_t, member_t = t["board"], t["member"]
+        open_cond = "out_date IS NULL"
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT DISTINCT trade_date FROM capital_flow "
-                        "ORDER BY trade_date DESC LIMIT %s", (n_days,))
+            cur.execute(
+                f"SELECT DISTINCT cf.trade_date FROM capital_flow cf "
+                f"WHERE EXISTS (SELECT 1 FROM {member_t} mm "
+                f"              WHERE mm.stock_code = cf.stock_code AND mm.{open_cond}) "
+                f"ORDER BY cf.trade_date DESC LIMIT %s", (n_days,))
             dates = sorted(r[0] for r in cur.fetchall())
             if not dates:
                 return {"dates": [], "items": []}
-            sql = ("SELECT b.board_code, b.board_name, sum(cf.main_net) AS main_net, "
-                   "count(DISTINCT cf.stock_code) AS covered, "
-                   "(SELECT count(*) FROM board_member m2 "
-                   " WHERE m2.board_code = b.board_code AND m2.valid_to IS NULL) AS members "
-                   "FROM board b "
-                   "JOIN board_member m ON m.board_code = b.board_code AND m.valid_to IS NULL "
-                   "JOIN capital_flow cf ON cf.stock_code = m.stock_code "
-                   "  AND cf.trade_date >= %s AND cf.trade_date <= %s "
-                   "WHERE b.board_type = %s")
+            sql = (f"SELECT b.board_code, b.board_name, sum(cf.main_net) AS main_net, "
+                   f"count(DISTINCT cf.stock_code) AS covered, "
+                   f"(SELECT count(*) FROM {member_t} m2 "
+                   f" WHERE m2.board_code = b.board_code AND m2.{open_cond}) AS members "
+                   f"FROM {board_t} b "
+                   f"JOIN {member_t} m ON m.board_code = b.board_code AND m.{open_cond} "
+                   f"JOIN capital_flow cf ON cf.stock_code = m.stock_code "
+                   f"  AND cf.trade_date >= %s AND cf.trade_date <= %s "
+                   f"WHERE b.board_type = %s")
             params: list = [dates[0], dates[-1], btype]
-            if btype == "concept":
+            if market == "cn" and btype == "concept":
                 sql += _CONCEPT_FILTER_SQL
                 params += [_GENERIC_CONCEPT_MAX_MEMBERS, list(_STYLE_LABEL_BOARDS)]
             cur.execute(sql + " GROUP BY 1, 2 ORDER BY 3 DESC NULLS LAST", params)
