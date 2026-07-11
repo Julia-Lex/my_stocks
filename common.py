@@ -266,13 +266,13 @@ def fetch_index(index_code: str) -> pd.DataFrame:
 MARKETS = {
     "hk": {
         "prefix": "hk_", "suffix": ".HK",
-        "indexes": ["HSI", "HSTECH"],          # 以 Task3 Step1 探测结果为准
+        "indexes": ["HSI", "HSTECH", "HSCEI"],   # 2026-07-11 补 HSCEI(与 index_member 成分对齐)
         "start": "19800101",
         "mviews": ("hk_weekly_price_hfq", "hk_monthly_price_hfq"),
     },
     "us": {
         "prefix": "us_", "suffix": ".US",
-        "indexes": [".INX", ".IXIC", ".DJI"],
+        "indexes": [".INX", ".IXIC", ".DJI", ".NDX"],   # 2026-07-11 补纳指100(与 index_member 对齐)
         "start": "19700101",
         "mviews": ("us_weekly_price_hfq", "us_monthly_price_hfq"),
     },
