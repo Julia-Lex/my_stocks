@@ -10,9 +10,17 @@
   * { box-sizing:border-box; }
   body { font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
          margin:0; background:#f7f7f8; color:#222; }
-  .wrap { max-width:1100px; margin:0 auto; padding:24px 16px 60px; }
-  h1 { font-size:20px; margin:0 0 16px; }
-  h1 .sub { font-weight:400; font-size:13px; color:var(--muted); }
+  /* 左侧栏 + 内容区布局 */
+  .layout { display:flex; min-height:100vh; }
+  .sidebar { width:184px; flex:none; background:#fff; border-right:1px solid var(--border);
+             padding:22px 12px; position:sticky; top:0; height:100vh; box-sizing:border-box; }
+  .sidebar h1 { font-size:18px; margin:0 4px 4px; }
+  .sidebar .sub { font-size:12px; color:var(--muted); margin:0 4px 18px; }
+  .snav { display:block; padding:10px 14px; border-radius:10px; cursor:pointer;
+          font-size:14.5px; margin-bottom:4px; color:#333; }
+  .snav:hover { background:#f0f4ff; }
+  .snav.on { background:var(--accent); color:#fff; font-weight:600; }
+  .wrap { flex:1; max-width:1100px; margin:0 auto; padding:24px 20px 60px; min-width:0; }
   #err { display:none; background:#fdecea; color:var(--neg); padding:10px 14px;
          border-radius:8px; margin-bottom:12px; }
   /* 搜索 */
@@ -103,12 +111,16 @@
 </style>
 </head>
 <body>
+<div class="layout">
+<aside class="sidebar">
+  <h1>财报查询</h1>
+  <div class="sub">A股 · 港股 · 美股</div>
+  <nav id="mainnav">
+    <span class="snav on" data-m="stock">个股信息</span>
+    <span class="snav" data-m="boards">板块信息</span>
+  </nav>
+</aside>
 <div class="wrap">
-  <h1>财报查询 <span class="sub">A股 · 港股 · 美股</span></h1>
-  <div class="vtabs" id="mainnav">
-    <div class="vtab on" data-m="stock">个股查询</div>
-    <div class="vtab" data-m="boards">A股板块</div>
-  </div>
   <div id="err"></div>
   <div id="stockpane">
     <div class="searchbox">
@@ -149,6 +161,7 @@
       <canvas id="cmpchart"></canvas>
     </div>
   </div>
+</div>
 </div>
 <script>
 const $ = s => document.querySelector(s);
@@ -476,9 +489,9 @@ let bcode = null, bname = '', bperiod2 = 'day';
 let cmpBoards = [];       // [{code,name}]
 const CMP_COLORS = ['#2563eb','#d93a3a','#1a9e5c','#b57e10','#7c3aed','#0891b2'];
 
-document.querySelectorAll('#mainnav .vtab').forEach(t=>t.onclick=()=>{
+document.querySelectorAll('#mainnav .snav').forEach(t=>t.onclick=()=>{
   mode = t.dataset.m;
-  document.querySelectorAll('#mainnav .vtab').forEach(x=>x.classList.toggle('on', x===t));
+  document.querySelectorAll('#mainnav .snav').forEach(x=>x.classList.toggle('on', x===t));
   $('#stockpane').style.display = mode==='stock' ? 'block' : 'none';
   $('#boards').style.display = mode==='boards' ? 'block' : 'none';
   if(mode==='boards' && !snap[btype]) loadBoards();
@@ -570,7 +583,7 @@ function drawTreemap(items, isMembers){
     const r = tmapRects.find(r=>mx>=r.x&&mx<r.x+r.w&&my>=r.y&&my<r.y+r.h);
     if(!r) return;
     if(isMembers){   // 成员股 → 跳个股查询
-      document.querySelector('#mainnav .vtab[data-m=stock]').click();
+      document.querySelector('#mainnav .snav[data-m=stock]').click();
       $('#q').value = `${r.it.name} ${r.it.code}`;
       pick({market:'cn', code:r.it.code, name:r.it.name});
     } else {
