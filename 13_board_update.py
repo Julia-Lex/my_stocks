@@ -91,6 +91,7 @@ def main() -> int:
         return 0
     finally:
         conn.close()
+        c.close_futu()   # futu 源:OpenQuoteContext 有非守护线程,不关进程不退出
 
 
 if __name__ == "__main__":

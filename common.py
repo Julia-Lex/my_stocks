@@ -1808,21 +1808,31 @@ def fetch_board_list() -> pd.DataFrame:
     return _fetch_board_list_futu() if BOARD_SOURCE == "futu" else _fetch_board_list_em()
 
 
-# 富途历史K线限频比其他接口严(10 次/30s),单独节流;返回三元组也与 _futu_call 不兼容
-_futu_kl_last = [0.0]
+# 富途低频接口限频 10 次/30s(request_history_kline、get_plate_stock 实测均是),
+# 比 _futu_call 的通用节流(1.05s)严——每个接口一把独立时钟,3.1s 间隔;
+# request_history_kline 返回三元组,也与 _futu_call 的二元组解包不兼容。
 _FUTU_KL_INTERVAL = float(os.getenv("ASTOCK_FUTU_KL_INTERVAL", "3.1"))
+_futu_kl_last = [0.0]
+_futu_ps_last = [0.0]   # get_plate_stock 专用时钟
+
+
+def _futu_pace(clock: list) -> None:
+    """按接口专属时钟限速(与 _futu_lock 互斥,含跨线程安全)。"""
+    with _futu_lock:
+        wait = _FUTU_KL_INTERVAL - (time.monotonic() - clock[0])
+        if wait > 0:
+            time.sleep(wait)
+        clock[0] = time.monotonic()
 
 
 def _futu_history_kline(code: str, start: str) -> pd.DataFrame:
     from futu import KLType, AuType
 
     ctx = _futu_context()
-    with _futu_lock:
-        wait = _FUTU_KL_INTERVAL - (time.monotonic() - _futu_kl_last[0])
-        if wait > 0:
-            time.sleep(wait)
-        _futu_kl_last[0] = time.monotonic()
-    ret, df, _ = ctx.request_history_kline(code, start=start, end=None,
+    _futu_pace(_futu_kl_last)
+    # end 必须显式传日期:板块代码 end=None 时富途返回 0 行(2026-07-11 实测,个股无此问题)
+    end = datetime.now(_CST).strftime("%Y-%m-%d")
+    ret, df, _ = ctx.request_history_kline(code, start=start, end=end,
                                            ktype=KLType.K_DAY, autype=AuType.NONE,
                                            max_count=None)
     if ret != 0:
@@ -1875,6 +1885,7 @@ def fetch_board_daily(board_code: str, board_name: str, board_type: str,
 def fetch_board_cons(board_code: str, board_type: str) -> set[str]:
     """板块当前成分股(全代码集合)。两源均按板块代码调用,规避板块改名。"""
     if BOARD_SOURCE == "futu":
+        _futu_pace(_futu_ps_last)   # get_plate_stock 同为 10 次/30s 低频接口
         df = _futu_call("get_plate_stock", board_code)
         if df is None or df.empty:
             return set()
