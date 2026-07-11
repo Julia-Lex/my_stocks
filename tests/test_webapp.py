@@ -341,6 +341,22 @@ def test_boards_calendar_hk():
     assert all(len(row["values"]) == 10 for row in d["rows"][:5])
 
 
+def test_boards_fundflow():
+    """板块主力资金流 = 成员个股 capital_flow(富途)聚合。
+    依赖:国有大型银行Ⅱ 的 6 只成员已回填(14_init_capital_flow --codes)。"""
+    r = client.get("/api/boards/fundflow", params={"btype": "industry", "period": "today"})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["dates"] and len(d["dates"]) == 1
+    bank = next(i for i in d["items"] if i["name"] == "国有大型银行Ⅱ")
+    assert bank["main_net"] is not None
+    assert bank["covered"] == bank["members"] == 6     # 成员全覆盖
+    r5 = client.get("/api/boards/fundflow", params={"btype": "industry", "period": "5d"})
+    assert r5.status_code == 200 and len(r5.json()["dates"]) == 5
+    assert client.get("/api/boards/fundflow",
+                      params={"btype": "industry", "period": "3d"}).status_code == 422
+
+
 def test_boards_compare():
     r0 = client.get("/api/boards/snapshot", params={"btype": "industry"})
     codes = [i["code"] for i in r0.json()["items"][:2]]
