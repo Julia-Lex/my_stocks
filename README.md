@@ -86,8 +86,8 @@ ASTOCK_DB_USER=zhu .venv/bin/python 03_daily_update.py
 40 18 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 10_fundamental_update.py >> update_fund.log 2>&1
 # 富途四连链:18:50 港基本面→美基本面→指数成分diff→港美板块diff ⚠️ 依赖 FutuOpenD 常驻
 50 18 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 13_fundamental_update_intl.py --market hk >> update_fund_hk.log 2>&1 && ASTOCK_DB_USER=zhu .venv/bin/python 13_fundamental_update_intl.py --market us >> update_fund_us.log 2>&1 && ASTOCK_DB_USER=zhu .venv/bin/python 17_index_member_intl.py >> update_idxmember.log 2>&1 && ASTOCK_DB_USER=zhu .venv/bin/python 19_board_intl.py >> update_board_intl.log 2>&1
-# A股板块日更(富途源):19:30,避开港美板块链 18:50-19:20 富途限频窗口
-30 19 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_BOARD_SOURCE=futu ASTOCK_DB_USER=zhu .venv/bin/python 21_board_update.py >> update_board.log 2>&1
+# A股板块+个股资金流二连链(富途源):19:30 起,避开港美板块链 18:50-19:20;单进程串行防跨进程限频互踩
+30 19 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_BOARD_SOURCE=futu ASTOCK_DB_USER=zhu .venv/bin/python 21_board_update.py >> update_board.log 2>&1 && ASTOCK_DB_USER=zhu .venv/bin/python 23_capital_flow_update.py --update >> update_capflow.log 2>&1
 # 事件数据:19:00(龙虎榜近5日+披露季预告/快报;北向已终结默认跳过)
 0 19 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 15_events_update.py >> update_events.log 2>&1
 # 周全量备份:周日 03:00(本地3份轮换 + rsync NAS,脚本带未挂载守卫)
