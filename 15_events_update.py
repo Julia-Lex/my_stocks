@@ -119,7 +119,9 @@ def alias_report(conn) -> None:
     with conn.cursor() as cur:
         cur.execute(
             "SELECT task, stock_code, left(message, 60) FROM etl_progress "
-            "WHERE status='error' AND task LIKE 'init_fund%%' ORDER BY task, stock_code LIMIT 20")
+            "WHERE status='error' AND task LIKE 'init_fund%%' "
+            "AND stock_code NOT LIKE '%%:%%' "   # 排除 'YYYYMMDD:kind' 复合键(截面期误报)
+            "ORDER BY task, stock_code LIMIT 20")
         rows = cur.fetchall()
     conn.commit()
     if rows:
