@@ -144,3 +144,31 @@ def test_kline_cn():
 def test_kline_not_found():
     r = client.get("/api/kline", params={"market": "cn", "code": "999999.SZ"})
     assert r.status_code == 404
+
+
+def test_kline_week_month():
+    from datetime import date as _date
+
+    day = client.get("/api/kline",
+                     params={"market": "cn", "code": "300308.SZ", "days": 60}).json()
+    for period, key in (("week", lambda d: d.isocalendar()[:2]),   # 每根 bar 一个自然周
+                        ("month", lambda d: (d.year, d.month))):   # 每根 bar 一个自然月
+        r = client.get("/api/kline", params={"market": "cn", "code": "300308.SZ",
+                                             "days": 260, "period": period})
+        assert r.status_code == 200
+        bars = r.json()["bars"]
+        assert 100 < len(bars) <= 260
+        assert bars == sorted(bars, key=lambda b: b["d"])
+        keys = [key(_date.fromisoformat(b["d"])) for b in bars]
+        assert len(keys) == len(set(keys)), f"{period} 粒度不对(仍是日线?)"
+        last = bars[-1]
+        assert last["l"] <= last["o"] <= last["h"] and last["l"] <= last["c"] <= last["h"]
+        assert last["v"] > 0
+        # 周/月线经 hfq→qfq 换算后,最新收盘应与日线最新收盘同量级(同一周/月内相等)
+        assert abs(last["c"] - day["bars"][-1]["c"]) / day["bars"][-1]["c"] < 0.05
+
+
+def test_kline_bad_period():
+    r = client.get("/api/kline", params={"market": "cn", "code": "300308.SZ",
+                                         "period": "hour"})
+    assert r.status_code == 422

@@ -44,8 +44,13 @@
   .card .val { font-size:19px; font-weight:650; margin-top:4px; }
   .card .val.neg { color:var(--neg); }
   .card .val .yoy { font-size:12px; font-weight:400; color:var(--muted); margin-left:4px; }
-  .sec { font-size:14px; font-weight:600; margin:18px 0 8px; color:#444; }
-  .sec .note-inline { font-weight:400; font-size:12px; color:var(--muted); margin-left:8px; }
+  .sec { font-size:14px; font-weight:600; margin:18px 0 8px; color:#444;
+         display:flex; align-items:center; gap:8px; }
+  .sec .note-inline { font-weight:400; font-size:12px; color:var(--muted); }
+  .ptabs { display:inline-flex; gap:4px; margin-left:4px; }
+  .ptab { padding:3px 14px; border:1px solid var(--border); border-radius:99px;
+          background:#fff; cursor:pointer; font-size:12.5px; font-weight:400; }
+  .ptab.on { background:var(--accent); border-color:var(--accent); color:#fff; }
   /* 频率单选 */
   .freq { display:flex; gap:14px; align-items:center; margin:0 0 12px; font-size:14px; }
   .freq label { cursor:pointer; display:flex; gap:4px; align-items:center; }
@@ -92,7 +97,11 @@ const MK = { cn:'A股', hk:'港股', us:'美股' };
 const CUR = { CNY:'人民币', HKD:'港元', USD:'美元' };
 let cur = null;          // statements 响应(无财报时为 null)
 let curStock = null;     // 当前选中的股票 {market, code, name}
-let quote = null;        // {fund, kline} 行情缓存,选股时清空
+let quote = null;        // {fund, klines:{day|week|month:...}} 行情缓存,选股时清空
+let kperiod = 'day';     // K线周期
+const KP = { day:{label:'日K', days:250, span:'近一年'},
+             week:{label:'周K', days:260, span:'近5年'},
+             month:{label:'月K', days:120, span:'近10年'} };
 let view = 'stmt';       // stmt=财务报表 | quote=个股行情
 let tab = 'income';
 let expanded = false;
@@ -251,16 +260,24 @@ function renderTable(){
 
 /* ---------- 个股行情视图 ---------- */
 async function renderQuote(){
+  const qs = `market=${curStock.market}&code=${encodeURIComponent(curStock.code)}`;
   if(!quote){
     $('#view').innerHTML = '<div class="note">加载中…</div>';
     try{
-      const qs = `market=${curStock.market}&code=${encodeURIComponent(curStock.code)}`;
       const [rf, rk] = await Promise.all([
-        fetch('/api/fundamental?'+qs), fetch('/api/kline?'+qs+'&days=250')]);
-      quote = { fund: rf.ok ? await rf.json() : null,
-                kline: rk.ok ? await rk.json() : null };
+        fetch('/api/fundamental?'+qs),
+        fetch(`/api/kline?${qs}&days=${KP[kperiod].days}&period=${kperiod}`)]);
+      quote = { fund: rf.ok ? await rf.json() : null, klines: {} };
+      if(rk.ok) quote.klines[kperiod] = await rk.json();
     }catch(ex){ err(ex.message); return; }
     if(view!=='quote') return;   // 加载期间用户已切走
+  }
+  if(quote.klines[kperiod] === undefined){   // 切周期,按需拉取并缓存
+    try{
+      const rk = await fetch(`/api/kline?${qs}&days=${KP[kperiod].days}&period=${kperiod}`);
+      quote.klines[kperiod] = rk.ok ? await rk.json() : null;
+    }catch(ex){ err(ex.message); return; }
+    if(view!=='quote') return;
   }
   const f = quote.fund;
   let html = '';
@@ -294,13 +311,16 @@ async function renderQuote(){
   } else {
     html += '<div class="note">暂无基本面数据</div>';
   }
-  const k = quote.kline;
-  html += `<div class="sec">日K线(近一年${k&&k.adjusted?',前复权':''})
-             <span class="note-inline">灰色曲线为成交量</span></div>`;
+  const k = quote.klines[kperiod];
+  html += `<div class="sec">K线
+    <span class="ptabs">${Object.entries(KP).map(([p,c]) =>
+      `<span class="ptab${p===kperiod?' on':''}" data-p="${p}">${c.label}</span>`).join('')}</span>
+    <span class="note-inline">${KP[kperiod].span}${k&&k.adjusted?' · 前复权':''} · 灰色曲线为成交量</span></div>`;
   html += k && k.bars.length
     ? `<div class="kwrap"><canvas id="kchart"></canvas><div id="ktip"></div></div>`
-    : '<div class="note">暂无日线数据</div>';
+    : '<div class="note">暂无K线数据</div>';
   $('#view').innerHTML = html;
+  document.querySelectorAll('.ptab').forEach(t=>t.onclick=()=>{ kperiod=t.dataset.p; renderQuote(); });
   if(k && k.bars.length) drawKline(k.bars);
 }
 
@@ -373,7 +393,8 @@ function drawKline(bars){
   cv.onmouseleave = ()=>{ tip.style.display='none'; };
 }
 const getCss = k => getComputedStyle(document.documentElement).getPropertyValue(k).trim();
-window.addEventListener('resize', ()=>{ if(view==='quote' && quote?.kline?.bars?.length && $('#kchart')) drawKline(quote.kline.bars); });
+window.addEventListener('resize', ()=>{ const k=quote?.klines?.[kperiod];
+  if(view==='quote' && k?.bars?.length && $('#kchart')) drawKline(k.bars); });
 </script>
 </body>
 </html>

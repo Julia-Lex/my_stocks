@@ -190,9 +190,9 @@ def statements(market: Literal["cn", "hk", "us"], code: str = Query(..., max_len
 # ---------------------------------------------------------------------------
 # 各市场行情/指标表。fin_indicator 三市场列基本一致(cn 多 industry,hk/us 多 currency)
 _QUOTE_TABLES = {
-    "cn": {"price": "daily_price", "adj": "adj_factor", "ind": "fin_indicator"},
-    "hk": {"price": "hk_daily_price", "adj": "hk_adj_factor", "ind": "hk_fin_indicator"},
-    "us": {"price": "us_daily_price", "adj": "us_adj_factor", "ind": "us_fin_indicator"},
+    "cn": {"price": "daily_price", "adj": "adj_factor", "ind": "fin_indicator", "mv_prefix": ""},
+    "hk": {"price": "hk_daily_price", "adj": "hk_adj_factor", "ind": "hk_fin_indicator", "mv_prefix": "hk_"},
+    "us": {"price": "us_daily_price", "adj": "us_adj_factor", "ind": "us_fin_indicator", "mv_prefix": "us_"},
 }
 
 _IND_COLS = ["report_date", "eps", "bps", "roe", "roa", "gross_margin", "net_margin",
@@ -244,15 +244,26 @@ def fundamental(market: Literal["cn", "hk", "us"], code: str = Query(..., max_le
 
 @app.get("/api/kline")
 def kline(market: Literal["cn", "hk", "us"], code: str = Query(..., max_length=16),
-          days: int = Query(250, ge=20, le=1000)):
-    """最近 days 个交易日的日线(前复权,若无复权因子则原始价)。"""
+          days: int = Query(250, ge=20, le=1000),
+          period: Literal["day", "week", "month"] = "day"):
+    """最近 days 根 K线(前复权,若无复权因子则原始价)。
+
+    day 从日线表现算 qfq;week/month 走 *_weekly/monthly_price_hfq 物化视图
+    (后复权),统一除以该股最新复权因子换算成前复权,与日线口径一致。
+    """
     qt = _QUOTE_TABLES[market]
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                f"SELECT trade_date, open, high, low, close, volume FROM {qt['price']} "
-                f"WHERE stock_code = %s ORDER BY trade_date DESC LIMIT %s", (code, days))
+            if period == "day":
+                cur.execute(
+                    f"SELECT trade_date, open, high, low, close, volume FROM {qt['price']} "
+                    f"WHERE stock_code = %s ORDER BY trade_date DESC LIMIT %s", (code, days))
+            else:
+                mv = f"{qt['mv_prefix']}{'weekly' if period == 'week' else 'monthly'}_price_hfq"
+                cur.execute(
+                    f"SELECT trade_date, open, high, low, close, volume FROM {mv} "
+                    f"WHERE stock_code = %s ORDER BY period_start DESC LIMIT %s", (code, days))
             price_rows = cur.fetchall()[::-1]   # 转升序
             if not price_rows:
                 raise HTTPException(status_code=404, detail="未找到该股票的日线数据")
@@ -263,20 +274,31 @@ def kline(market: Literal["cn", "hk", "us"], code: str = Query(..., max_length=1
     finally:
         conn.close()
 
-    # 复权因子只在变动日有记录:按日期前向填充;qfq = 价格 × 当日因子 ÷ 最新因子
     adjusted = bool(factors)
-    bars = []
-    fi = -1  # factors 中 ≤ 当前交易日的最后下标
     latest_f = float(factors[-1][1]) if factors else 1.0
-    for d, o, h, l, c, v in price_rows:
-        while fi + 1 < len(factors) and factors[fi + 1][0] <= d:
-            fi += 1
-        f = (float(factors[fi][1]) / latest_f) if (adjusted and fi >= 0) else 1.0
-        bars.append({"d": d.isoformat(),
-                     "o": round(float(o) * f, 3), "h": round(float(h) * f, 3),
-                     "l": round(float(l) * f, 3), "c": round(float(c) * f, 3),
-                     "v": int(v) if v is not None else 0})
-    return {"code": code, "market": market, "adjusted": adjusted, "bars": bars}
+    bars = []
+    if period == "day":
+        # 日线是不复权原始价。因子只在变动日有记录:按日期前向填充;
+        # qfq = 价格 × 当日因子 ÷ 最新因子
+        fi = -1  # factors 中 ≤ 当前交易日的最后下标
+        for d, o, h, l, c, v in price_rows:
+            while fi + 1 < len(factors) and factors[fi + 1][0] <= d:
+                fi += 1
+            f = (float(factors[fi][1]) / latest_f) if (adjusted and fi >= 0) else 1.0
+            bars.append({"d": d.isoformat(),
+                         "o": round(float(o) * f, 3), "h": round(float(h) * f, 3),
+                         "l": round(float(l) * f, 3), "c": round(float(c) * f, 3),
+                         "v": int(v) if v is not None else 0})
+    else:
+        # 物化视图已是后复权价:除以最新因子即前复权
+        f = 1.0 / latest_f
+        for d, o, h, l, c, v in price_rows:
+            bars.append({"d": d.isoformat(),
+                         "o": round(float(o) * f, 3), "h": round(float(h) * f, 3),
+                         "l": round(float(l) * f, 3), "c": round(float(c) * f, 3),
+                         "v": int(v) if v is not None else 0})
+    return {"code": code, "market": market, "adjusted": adjusted,
+            "period": period, "bars": bars}
 
 
 _STATIC = Path(__file__).resolve().parent / "static"
