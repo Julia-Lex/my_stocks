@@ -1941,6 +1941,44 @@ def fetch_board_cons(board_code: str, board_type: str) -> set[str]:
     return {to_full_code(str(s)) for s in df["代码"].astype(str)}
 
 
+def fetch_capital_flow(stock_code: str) -> pd.DataFrame:
+    """个股日级资金流(富途 get_capital_flow)。返回列:
+    trade_date, main_net, super_net, big_net, mid_net, sml_net, total_net(元)。
+
+    富途日级历史仅滚动一年(2026-07-11 实测:请求 2018 起只返回近 242 个
+    交易日),深历史靠日增量积累。北交所等富途无行情的代码会抛错,调用方
+    按非致命处理。
+    """
+    from futu import PeriodType
+
+    sym, ex = stock_code.split(".")
+    df = _futu_call("get_capital_flow", f"{ex}.{sym}", period_type=PeriodType.DAY,
+                    start="2018-01-01", end=beijing_now().strftime("%Y-%m-%d"))
+    if df is None or df.empty:
+        return pd.DataFrame()
+    out = pd.DataFrame({
+        "trade_date": pd.to_datetime(df["capital_flow_item_time"]).dt.date,
+        "main_net": pd.to_numeric(df["main_in_flow"], errors="coerce"),
+        "super_net": pd.to_numeric(df["super_in_flow"], errors="coerce"),
+        "big_net": pd.to_numeric(df["big_in_flow"], errors="coerce"),
+        "mid_net": pd.to_numeric(df["mid_in_flow"], errors="coerce"),
+        "sml_net": pd.to_numeric(df["sml_in_flow"], errors="coerce"),
+        "total_net": pd.to_numeric(df["in_flow"], errors="coerce"),
+    })
+    return out.dropna(subset=["trade_date"]).drop_duplicates("trade_date")
+
+
+def upsert_capital_flow(conn, stock_code: str, df: pd.DataFrame) -> int:
+    if df is None or df.empty:
+        return 0
+    cols = ["stock_code", "trade_date", "main_net", "super_net",
+            "big_net", "mid_net", "sml_net", "total_net"]
+    rows = [(stock_code, r.trade_date, _num(r, "main_net"), _num(r, "super_net"),
+             _num(r, "big_net"), _num(r, "mid_net"), _num(r, "sml_net"),
+             _num(r, "total_net")) for r in df.itertuples(index=False)]
+    return upsert(conn, "capital_flow", cols, rows, ["stock_code", "trade_date"])
+
+
 def fetch_board_fund_flow(board_name: str, board_type: str) -> pd.DataFrame:
     """板块历史资金流(lmt=0 全部可用历史)。净额单位:元;占比单位:%。
 

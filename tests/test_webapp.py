@@ -210,3 +210,259 @@ def test_kline_bad_period():
     r = client.get("/api/kline", params={"market": "cn", "code": "300308.SZ",
                                          "period": "hour"})
     assert r.status_code == 422
+
+
+def _wl_all_items(d):
+    return [i for g in d["groups"] for i in g["items"]]
+
+
+def test_watchlist_crud():
+    """自选股:增删查(分组结构),列表带名称与最新涨跌幅。"""
+    # 清理可能的残留
+    client.delete("/api/watchlist/cn/300308.SZ")
+    r = client.post("/api/watchlist", json={"market": "cn", "code": "300308.SZ"})
+    assert r.status_code == 200
+    r = client.post("/api/watchlist", json={"market": "cn", "code": "300308.SZ"})
+    assert r.status_code == 200                     # 重复添加幂等
+    d = client.get("/api/watchlist").json()
+    assert d["groups"][0]["name"]                   # 至少有默认分组
+    hit = next(i for i in _wl_all_items(d) if i["code"] == "300308.SZ")
+    assert hit["name"] == "中际旭创" and hit["market"] == "cn"
+    assert hit["close"] and hit["pct_chg"] is not None
+    assert client.delete("/api/watchlist/cn/300308.SZ").status_code == 200
+    d = client.get("/api/watchlist").json()
+    assert all(i["code"] != "300308.SZ" for i in _wl_all_items(d))
+    # 非法市场
+    assert client.post("/api/watchlist",
+                       json={"market": "xx", "code": "1"}).status_code == 422
+
+
+def test_watchlist_groups_and_order():
+    """分组增删与拖拽排序(order 批量重排,含跨组移动)。"""
+    # 准备:清残留,建组,加两只
+    client.delete("/api/watchlist/cn/300308.SZ")
+    client.delete("/api/watchlist/cn/300476.SZ")
+    client.delete("/api/watchlist/groups/测试组")
+    assert client.post("/api/watchlist/groups", json={"name": "测试组"}).status_code == 200
+    assert client.post("/api/watchlist/groups", json={"name": "测试组"}).status_code == 200  # 幂等
+    client.post("/api/watchlist", json={"market": "cn", "code": "300308.SZ", "grp": "测试组"})
+    client.post("/api/watchlist", json={"market": "cn", "code": "300476.SZ", "grp": "测试组"})
+    d = client.get("/api/watchlist").json()
+    g = next(x for x in d["groups"] if x["name"] == "测试组")
+    assert [i["code"] for i in g["items"]] == ["300308.SZ", "300476.SZ"]
+    # 重排:交换顺序
+    r = client.put("/api/watchlist/order", json={"groups": [
+        {"name": "测试组", "items": [{"market": "cn", "code": "300476.SZ"},
+                                     {"market": "cn", "code": "300308.SZ"}]}]})
+    assert r.status_code == 200
+    d = client.get("/api/watchlist").json()
+    g = next(x for x in d["groups"] if x["name"] == "测试组")
+    assert [i["code"] for i in g["items"]] == ["300476.SZ", "300308.SZ"]
+    # 跨组:把 300308 挪到默认分组
+    client.put("/api/watchlist/order", json={"groups": [
+        {"name": "默认分组", "items": [{"market": "cn", "code": "300308.SZ"}]},
+        {"name": "测试组", "items": [{"market": "cn", "code": "300476.SZ"}]}]})
+    d = client.get("/api/watchlist").json()
+    default = next(x for x in d["groups"] if x["name"] == "默认分组")
+    assert any(i["code"] == "300308.SZ" for i in default["items"])
+    # 删组:成员并入默认分组;默认分组不可删
+    assert client.delete("/api/watchlist/groups/测试组").status_code == 200
+    d = client.get("/api/watchlist").json()
+    assert all(x["name"] != "测试组" for x in d["groups"])
+    default = next(x for x in d["groups"] if x["name"] == "默认分组")
+    assert any(i["code"] == "300476.SZ" for i in default["items"])
+    assert client.delete("/api/watchlist/groups/默认分组").status_code == 422
+    # 清理
+    client.delete("/api/watchlist/cn/300308.SZ")
+    client.delete("/api/watchlist/cn/300476.SZ")
+
+
+def test_index_kline():
+    """市场指数日线 + 全市场总成交量(该市场全部个股当日 volume 之和)。"""
+    r = client.get("/api/index/kline",
+                   params={"market": "cn", "code": "sh000001", "days": 250})
+    assert r.status_code == 200
+    d = r.json()
+    bars = d["bars"]
+    assert len(bars) == 250
+    assert bars == sorted(bars, key=lambda b: b["d"])
+    last = bars[-1]
+    assert last["l"] <= last["o"] <= last["h"] and last["l"] <= last["c"] <= last["h"]
+    # 个股日线可能比指数滞后 1-2 天(cron 时点),取最近 5 根内的最大量判断
+    assert max(b["v"] for b in bars[-5:]) > 1e10   # A股全市场日总量千亿股量级
+    r_hk = client.get("/api/index/kline", params={"market": "hk", "code": "HSI"})
+    assert r_hk.status_code == 200
+    assert max(b["v"] for b in r_hk.json()["bars"][-5:]) > 1e9
+    r_us = client.get("/api/index/kline", params={"market": "us", "code": ".INX"})
+    assert r_us.status_code == 200
+    assert max(b["v"] for b in r_us.json()["bars"][-5:]) > 1e8
+    assert client.get("/api/index/kline",
+                      params={"market": "cn", "code": "nosuch"}).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# A股板块
+# ---------------------------------------------------------------------------
+
+def _first_industry_code():
+    r = client.get("/api/boards/snapshot", params={"btype": "industry"})
+    return r.json()["items"][0]["code"]
+
+
+def test_boards_snapshot():
+    r = client.get("/api/boards/snapshot", params={"btype": "industry"})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["date"] >= "2026-07-10"
+    assert len(d["items"]) > 100          # 131 个行业板块基本都有当日数据
+    it = d["items"][0]
+    assert it["code"] and it["name"] and it["pct_chg"] is not None
+    assert it["amount"] > 0
+    # 按涨跌幅降序
+    pcts = [i["pct_chg"] for i in d["items"] if i["pct_chg"] is not None]
+    assert pcts == sorted(pcts, reverse=True)
+
+
+def test_boards_snapshot_bad_type():
+    r = client.get("/api/boards/snapshot", params={"btype": "sector"})
+    assert r.status_code == 422
+
+
+def test_boards_snapshot_periods_and_mktcap():
+    """涨跌幅周期与板块市值:period 跨期收益、mktcap=成员总市值聚合。"""
+    today = client.get("/api/boards/snapshot", params={"btype": "industry"}).json()
+    it0 = today["items"][0]
+    assert it0["mktcap"] and it0["mktcap"] > 1e10          # 市值字段存在且量级合理
+    r20 = client.get("/api/boards/snapshot", params={"btype": "industry", "period": "20d"})
+    assert r20.status_code == 200
+    d20 = {i["code"]: i["pct_chg"] for i in r20.json()["items"]}
+    dtoday = {i["code"]: i["pct_chg"] for i in today["items"]}
+    diffs = [abs(d20[c] - dtoday[c]) for c in d20 if c in dtoday
+             and d20[c] is not None and dtoday[c] is not None]
+    assert sum(1 for x in diffs if x > 0.5) > 50           # 20日涨幅明显不同于当日
+    # 排序仍按所选周期涨幅降序
+    pcts = [i["pct_chg"] for i in r20.json()["items"] if i["pct_chg"] is not None]
+    assert pcts == sorted(pcts, reverse=True)
+    assert client.get("/api/boards/snapshot",
+                      params={"btype": "industry", "period": "ytd"}).status_code == 200
+    assert client.get("/api/boards/snapshot",
+                      params={"btype": "industry", "period": "3d"}).status_code == 422
+
+
+def test_boards_concept_excludes_generic():
+    """概念板块剔除泛概念(成员>400,如融资融券/MSCI),真主题(存储器/CPO)保留。"""
+    r = client.get("/api/boards/snapshot", params={"btype": "concept"})
+    names = [i["name"] for i in r.json()["items"]]
+    assert "融资融券" not in names and "转融券标的" not in names
+    assert "存储器" in names and "共封装光模块(CPO)" in names
+    rc = client.get("/api/boards/calendar", params={"btype": "concept", "days": 10})
+    cal_names = [row["name"] for row in rc.json()["rows"]]
+    assert "融资融券" not in cal_names
+
+
+def test_boards_calendar():
+    r = client.get("/api/boards/calendar", params={"btype": "industry", "days": 20})
+    assert r.status_code == 200
+    d = r.json()
+    assert len(d["dates"]) == 20
+    assert d["dates"] == sorted(d["dates"])
+    assert len(d["rows"]) > 100
+    assert all(len(row["values"]) == 20 for row in d["rows"][:5])
+
+
+def test_boards_kline():
+    from datetime import date as _date
+    code = _first_industry_code()
+    r = client.get("/api/boards/kline", params={"code": code, "days": 250})
+    assert r.status_code == 200
+    bars = r.json()["bars"]
+    assert len(bars) == 250
+    assert bars == sorted(bars, key=lambda b: b["d"])
+    # 周线聚合:每根一个自然周
+    rw = client.get("/api/boards/kline", params={"code": code, "days": 100, "period": "week"})
+    wbars = rw.json()["bars"]
+    keys = [_date.fromisoformat(b["d"]).isocalendar()[:2] for b in wbars]
+    assert len(keys) == len(set(keys)) and len(wbars) > 50
+
+
+def test_boards_members():
+    code = _first_industry_code()
+    r = client.get("/api/boards/members", params={"code": code})
+    assert r.status_code == 200
+    d = r.json()
+    assert len(d["items"]) >= 3
+    it = d["items"][0]
+    assert it["code"] and it["name"]
+
+
+def test_boards_snapshot_hk_us():
+    """港/美股板块无指数日线,快照从成员股现算:等权涨跌幅 + 成交额近似。"""
+    for market, min_boards in (("hk", 50), ("us", 50)):
+        r = client.get("/api/boards/snapshot", params={"market": market, "btype": "industry"})
+        assert r.status_code == 200
+        d = r.json()
+        assert len(d["items"]) >= min_boards
+        it = d["items"][0]
+        assert it["pct_chg"] is not None and it["amount"] > 0
+        assert it["mktcap"] is None       # 港美无估值表
+        # 周期涨幅同样可算
+        r20 = client.get("/api/boards/snapshot",
+                         params={"market": market, "btype": "industry", "period": "20d"})
+        assert r20.status_code == 200 and r20.json()["items"]
+
+
+def test_boards_members_hk():
+    r0 = client.get("/api/boards/snapshot", params={"market": "hk", "btype": "industry"})
+    code = r0.json()["items"][0]["code"]
+    r = client.get("/api/boards/members", params={"market": "hk", "code": code})
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert len(items) >= 2 and items[0]["name"]
+
+
+def test_boards_calendar_hk():
+    r = client.get("/api/boards/calendar", params={"market": "hk", "btype": "industry",
+                                                   "days": 10})
+    assert r.status_code == 200
+    d = r.json()
+    assert len(d["dates"]) == 10 and len(d["rows"]) >= 50
+    assert all(len(row["values"]) == 10 for row in d["rows"][:5])
+
+
+def test_boards_fundflow():
+    """板块主力资金流 = 成员个股 capital_flow(富途)聚合。
+    依赖:国有大型银行Ⅱ 的 6 只成员已回填(14_init_capital_flow --codes)。"""
+    r = client.get("/api/boards/fundflow", params={"btype": "industry", "period": "today"})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["dates"] and len(d["dates"]) == 1
+    bank = next(i for i in d["items"] if i["name"] == "国有大型银行Ⅱ")
+    assert bank["main_net"] is not None
+    assert bank["covered"] == bank["members"] == 6     # 成员全覆盖
+    r5 = client.get("/api/boards/fundflow", params={"btype": "industry", "period": "5d"})
+    assert r5.status_code == 200 and len(r5.json()["dates"]) == 5
+    assert client.get("/api/boards/fundflow",
+                      params={"btype": "industry", "period": "3d"}).status_code == 422
+
+
+def test_boards_fundflow_hk_us_structure():
+    """港美资金流:结构可用;数值断言待回填完成(链式任务)后自然生效。"""
+    for market in ("hk", "us"):
+        r = client.get("/api/boards/fundflow",
+                       params={"btype": "industry", "market": market})
+        assert r.status_code == 200
+        d = r.json()
+        assert isinstance(d["items"], list)
+        for it in d["items"][:3]:
+            assert it["code"] and it["members"] >= it["covered"] >= 0
+
+
+def test_boards_compare():
+    r0 = client.get("/api/boards/snapshot", params={"btype": "industry"})
+    codes = [i["code"] for i in r0.json()["items"][:2]]
+    r = client.get("/api/boards/compare", params={"codes": ",".join(codes), "days": 120})
+    assert r.status_code == 200
+    series = r.json()["series"]
+    assert len(series) == 2
+    for s in series:
+        assert s["name"] and len(s["dates"]) == len(s["closes"]) > 100

@@ -360,6 +360,570 @@ def kline(market: Literal["cn", "hk", "us"], code: str = Query(..., max_length=1
             "period": period, "bars": bars}
 
 
+# ---------------------------------------------------------------------------
+# 自选股(webapp 应用数据)
+# ---------------------------------------------------------------------------
+from pydantic import BaseModel  # noqa: E402
+
+
+class WatchItem(BaseModel):
+    market: Literal["cn", "hk", "us"]
+    code: str
+    grp: str = "默认分组"
+
+
+class WatchGroup(BaseModel):
+    name: str
+
+
+class WatchOrderItem(BaseModel):
+    market: Literal["cn", "hk", "us"]
+    code: str
+
+
+class WatchOrderGroup(BaseModel):
+    name: str
+    items: list[WatchOrderItem]
+
+
+class WatchOrder(BaseModel):
+    groups: list[WatchOrderGroup]
+
+
+@app.get("/api/watchlist")
+def watchlist_get():
+    """自选股(按分组),带名称与最新收盘/涨跌幅。空分组也返回(供拖入)。"""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT name FROM watchlist_group ORDER BY sort_order, name")
+            groups = {r[0]: [] for r in cur.fetchall()}
+            cur.execute("SELECT market, stock_code, grp FROM watchlist "
+                        "ORDER BY sort_order, added_at")
+            for market, code, grp in cur.fetchall():
+                cfg, qt = MARKETS[market], _QUOTE_TABLES[market]
+                cur.execute(
+                    f"SELECT {cfg['name_expr']} FROM {cfg['basic']} WHERE stock_code = %s",
+                    (code,))
+                nr = cur.fetchone()
+                cur.execute(
+                    f"SELECT close, pct_chg FROM {qt['price']} "
+                    f"WHERE stock_code = %s ORDER BY trade_date DESC LIMIT 1", (code,))
+                pr = cur.fetchone()
+                groups.setdefault(grp, []).append(
+                    {"market": market, "code": code,
+                     "name": nr[0] if nr else code,
+                     "close": float(pr[0]) if pr and pr[0] is not None else None,
+                     "pct_chg": float(pr[1]) if pr and pr[1] is not None else None})
+    finally:
+        conn.close()
+    return {"groups": [{"name": g, "items": items} for g, items in groups.items()]}
+
+
+@app.post("/api/watchlist")
+def watchlist_add(item: WatchItem):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO watchlist_group (name, sort_order) "
+                        "VALUES (%s, 999) ON CONFLICT DO NOTHING", (item.grp[:32],))
+            cur.execute("SELECT coalesce(max(sort_order), 0) + 1 FROM watchlist WHERE grp = %s",
+                        (item.grp[:32],))
+            nxt = cur.fetchone()[0]
+            cur.execute("INSERT INTO watchlist (market, stock_code, grp, sort_order) "
+                        "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                        (item.market, item.code[:16], item.grp[:32], nxt))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.post("/api/watchlist/groups")
+def watchlist_group_add(g: WatchGroup):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT coalesce(max(sort_order), 0) + 1 FROM watchlist_group")
+            cur.execute("INSERT INTO watchlist_group (name, sort_order) "
+                        "SELECT %s, coalesce(max(sort_order), 0) + 1 FROM watchlist_group "
+                        "ON CONFLICT DO NOTHING", (g.name[:32],))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.delete("/api/watchlist/groups/{name}")
+def watchlist_group_del(name: str):
+    if name == "默认分组":
+        raise HTTPException(status_code=422, detail="默认分组不可删除")
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            # 成员并入默认分组(排到末尾)
+            cur.execute("SELECT coalesce(max(sort_order), 0) FROM watchlist WHERE grp = '默认分组'")
+            base = cur.fetchone()[0]
+            cur.execute("UPDATE watchlist SET grp = '默认分组', sort_order = sort_order + %s "
+                        "WHERE grp = %s", (base + 1000, name))
+            cur.execute("DELETE FROM watchlist_group WHERE name = %s", (name,))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.put("/api/watchlist/order")
+def watchlist_order(order: WatchOrder):
+    """拖拽后的批量重排:按前端给出的分组顺序与组内顺序整体重写。"""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            for gi, g in enumerate(order.groups):
+                cur.execute("UPDATE watchlist_group SET sort_order = %s WHERE name = %s",
+                            (gi, g.name[:32]))
+                for si, it in enumerate(g.items):
+                    cur.execute("UPDATE watchlist SET grp = %s, sort_order = %s "
+                                "WHERE market = %s AND stock_code = %s",
+                                (g.name[:32], si, it.market, it.code))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.delete("/api/watchlist/{market}/{code}")
+def watchlist_del(market: Literal["cn", "hk", "us"], code: str):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM watchlist WHERE market = %s AND stock_code = %s",
+                        (market, code))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# 市场指数
+# ---------------------------------------------------------------------------
+_INDEX_TABLES = {
+    "cn": {"index": "index_daily", "price": "daily_price"},
+    "hk": {"index": "hk_index_daily", "price": "hk_daily_price"},
+    "us": {"index": "us_index_daily", "price": "us_daily_price"},
+}
+
+
+@app.get("/api/index/kline")
+def index_kline(market: Literal["cn", "hk", "us"],
+                code: str = Query(..., max_length=16),
+                days: int = Query(250, ge=20, le=1000)):
+    """指数日线,volume 替换为该市场全部个股当日成交量之和(市场总量口径;
+    美股为精选池 ~550 只,总量偏小)。"""
+    t = _INDEX_TABLES[market]
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT trade_date, open, high, low, close FROM {t['index']} "
+                f"WHERE index_code = %s ORDER BY trade_date DESC LIMIT %s", (code, days))
+            rows = cur.fetchall()[::-1]
+            if not rows:
+                raise HTTPException(status_code=404, detail="未找到该指数")
+            cur.execute(
+                f"SELECT trade_date, sum(volume) FROM {t['price']} "
+                f"WHERE trade_date >= %s GROUP BY trade_date", (rows[0][0],))
+            mvol = {r[0]: int(r[1]) for r in cur.fetchall() if r[1] is not None}
+    finally:
+        conn.close()
+    bars = [{"d": r[0].isoformat(),
+             "o": float(r[1]), "h": float(r[2]), "l": float(r[3]), "c": float(r[4]),
+             "v": mvol.get(r[0], 0)} for r in rows]
+    return {"code": code, "market": market, "bars": bars}
+
+
+# ---------------------------------------------------------------------------
+# A股板块(board/board_daily/board_member,2018 年起;board_fund_flow 尚空)
+# ---------------------------------------------------------------------------
+
+def _board_latest_date(cur, before=None):
+    cur.execute("SELECT max(trade_date) FROM board_daily" +
+                (" WHERE trade_date <= %s" if before else ""),
+                (before,) if before else ())
+    return cur.fetchone()[0]
+
+
+# 泛概念过滤:融资融券/MSCI/深股通这类全市场属性标签成员数千只,不是真主题,
+# 会在热力图/日历里淹没真正的概念板块。按现役成员数阈值剔除(存储器/CPO 约 180 只);
+# 市值/价格风格标签成员数不高但同样无主题信息,按名单剔除。
+_GENERIC_CONCEPT_MAX_MEMBERS = 400
+_STYLE_LABEL_BOARDS = ("大盘股", "中盘股", "小盘股", "微盘股", "高价股", "低价股")
+_CONCEPT_FILTER_SQL = (
+    " AND (SELECT count(*) FROM board_member m "
+    "      WHERE m.board_code = b.board_code AND m.valid_to IS NULL) <= %s"
+    " AND b.board_name <> ALL(%s)")
+
+
+_PERIOD_DAYS = {"5d": 5, "10d": 10, "20d": 20, "60d": 60, "120d": 120, "250d": 250}
+
+# 港/美股板块:无板块指数日线、个股 amount 为空(腾讯源)、无估值表。
+# 指标从成员股现算:涨跌幅=成员等权平均,成交额≈Σ(收盘×成交量),市值缺省。
+_INTL_BOARD = {
+    "hk": {"board": "hk_board", "member": "hk_board_member",
+           "price": "hk_daily_price", "basic": "hk_stock_basic",
+           "name_expr": "COALESCE(s.name_cn, s.name)"},
+    "us": {"board": "us_board", "member": "us_board_member",
+           "price": "us_daily_price", "basic": "us_stock_basic",
+           "name_expr": "s.name"},
+}
+
+
+def _intl_latest_date(cur, price_table, before=None):
+    cur.execute(f"SELECT max(trade_date) FROM {price_table}" +
+                (" WHERE trade_date <= %s" if before else ""),
+                (before,) if before else ())
+    return cur.fetchone()[0]
+
+
+def _intl_base_date(cur, price_table, d, period):
+    if period == "ytd":
+        cur.execute(f"SELECT max(trade_date) FROM {price_table} "
+                    f"WHERE trade_date < date_trunc('year', %s::date)", (d,))
+    else:
+        cur.execute(f"SELECT trade_date FROM (SELECT DISTINCT trade_date "
+                    f"FROM {price_table} WHERE trade_date <= %s "
+                    f"ORDER BY trade_date DESC LIMIT %s) t "
+                    f"ORDER BY trade_date LIMIT 1", (d, _PERIOD_DAYS[period] + 1))
+    row = cur.fetchone()
+    return row[0] if row else None
+
+
+@app.get("/api/boards/snapshot")
+def boards_snapshot(btype: Literal["industry", "concept"],
+                    date_: str | None = Query(None, alias="date", max_length=10),
+                    period: Literal["today", "5d", "10d", "20d",
+                                    "60d", "120d", "250d", "ytd"] = "today",
+                    market: Literal["cn", "hk", "us"] = "cn"):
+    """某交易日(默认最新)全部板块快照,按所选周期涨跌幅降序。
+
+    A股:period=today 用板块指数当日 pct_chg;其余用 收盘/基期收盘-1(基期=N 个
+    交易日前或上年末)。mktcap=现役成员股总市值之和(估值表最新日)。
+    港/美股:从成员股现算(见 _INTL_BOARD 注释)。
+    """
+    if market != "cn":
+        return _intl_boards_snapshot(market, btype, date_, period)
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            d = _board_latest_date(cur, date_)
+            # 基期日
+            base_d = None
+            if period == "ytd":
+                cur.execute("SELECT max(trade_date) FROM board_daily "
+                            "WHERE trade_date < date_trunc('year', %s::date)", (d,))
+                base_d = cur.fetchone()[0]
+            elif period != "today":
+                cur.execute("SELECT trade_date FROM (SELECT DISTINCT trade_date "
+                            "FROM board_daily WHERE trade_date <= %s "
+                            "ORDER BY trade_date DESC LIMIT %s) t "
+                            "ORDER BY trade_date LIMIT 1", (d, _PERIOD_DAYS[period] + 1))
+                base_d = cur.fetchone()[0]
+            pct_expr = ("cur.pct_chg" if period == "today" else
+                        "CASE WHEN base.close > 0 THEN (cur.close/base.close - 1)*100 END")
+            base_join = ("" if period == "today" else
+                         "LEFT JOIN board_daily base ON base.board_code = cur.board_code "
+                         "AND base.trade_date = %s ")
+            cur.execute("SELECT max(trade_date) FROM daily_valuation WHERE trade_date <= %s", (d,))
+            val_d = cur.fetchone()[0]
+            sql = (f"SELECT b.board_code, b.board_name, {pct_expr} AS pct, "
+                   f"cur.amount, cur.turnover, cur.close, mv.mktcap "
+                   f"FROM board_daily cur JOIN board b USING (board_code) "
+                   f"{base_join}"
+                   f"LEFT JOIN (SELECT m.board_code, sum(v.total_mv) AS mktcap "
+                   f"           FROM board_member m JOIN daily_valuation v "
+                   f"             ON v.stock_code = m.stock_code AND v.trade_date = %s "
+                   f"           WHERE m.valid_to IS NULL GROUP BY 1) mv "
+                   f"  ON mv.board_code = cur.board_code "
+                   f"WHERE cur.trade_date = %s AND b.board_type = %s")
+            params: list = ([base_d] if base_join else []) + [val_d, d, btype]
+            if btype == "concept":
+                sql += _CONCEPT_FILTER_SQL
+                params += [_GENERIC_CONCEPT_MAX_MEMBERS, list(_STYLE_LABEL_BOARDS)]
+            cur.execute(sql + " ORDER BY 3 DESC NULLS LAST", params)
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    fnum = lambda v: float(v) if v is not None else None  # noqa: E731
+    return {"date": d.isoformat() if d else None, "period": period,
+            "base_date": base_d.isoformat() if base_d else None,
+            "items": [{"code": r[0], "name": r[1], "pct_chg": fnum(r[2]),
+                       "amount": fnum(r[3]), "turnover": fnum(r[4]),
+                       "close": fnum(r[5]), "mktcap": fnum(r[6])} for r in rows]}
+
+
+def _intl_boards_snapshot(market: str, btype: str, date_, period: str):
+    t = _INTL_BOARD[market]
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            d = _intl_latest_date(cur, t["price"], date_)
+            base_d = None
+            if period == "today":
+                pct_expr, base_join, base_params = "avg(p.pct_chg)", "", []
+            else:
+                base_d = _intl_base_date(cur, t["price"], d, period)
+                pct_expr = "avg(CASE WHEN p0.close > 0 THEN (p.close/p0.close - 1)*100 END)"
+                base_join = (f"JOIN {t['price']} p0 ON p0.stock_code = m.stock_code "
+                             f"AND p0.trade_date = %s ")
+                base_params = [base_d]
+            cur.execute(
+                f"SELECT b.board_code, b.board_name, {pct_expr} AS pct, "
+                f"sum(p.close * p.volume) AS amount "
+                f"FROM {t['board']} b "
+                f"JOIN {t['member']} m ON m.board_code = b.board_code AND m.out_date IS NULL "
+                f"JOIN {t['price']} p ON p.stock_code = m.stock_code AND p.trade_date = %s "
+                f"{base_join}"
+                f"WHERE b.board_type = %s "
+                f"GROUP BY 1, 2 ORDER BY 3 DESC NULLS LAST",
+                [d] + base_params + [btype])
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    fnum = lambda v: float(v) if v is not None else None  # noqa: E731
+    return {"date": d.isoformat() if d else None, "period": period,
+            "base_date": base_d.isoformat() if base_d else None,
+            "items": [{"code": r[0], "name": r[1], "pct_chg": fnum(r[2]),
+                       "amount": fnum(r[3]), "turnover": None,
+                       "close": None, "mktcap": None} for r in rows]}
+
+
+@app.get("/api/boards/calendar")
+def boards_calendar(btype: Literal["industry", "concept"],
+                    days: int = Query(20, ge=5, le=60),
+                    market: Literal["cn", "hk", "us"] = "cn"):
+    if market != "cn":
+        return _intl_boards_calendar(market, btype, days)
+    """板块 × 最近 N 个交易日的涨跌幅矩阵(轮动热力日历)。行按近 5 日累计涨幅降序。"""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT trade_date FROM board_daily "
+                        "ORDER BY trade_date DESC LIMIT %s", (days,))
+            dates = sorted(r[0] for r in cur.fetchall())
+            if not dates:
+                return {"dates": [], "rows": []}
+            sql = ("SELECT d.board_code, b.board_name, d.trade_date, d.pct_chg "
+                   "FROM board_daily d JOIN board b USING (board_code) "
+                   "WHERE b.board_type = %s AND d.trade_date >= %s")
+            params: list = [btype, dates[0]]
+            if btype == "concept":
+                sql += _CONCEPT_FILTER_SQL
+                params += [_GENERIC_CONCEPT_MAX_MEMBERS, list(_STYLE_LABEL_BOARDS)]
+            cur.execute(sql, params)
+            data = cur.fetchall()
+    finally:
+        conn.close()
+    idx = {dt: i for i, dt in enumerate(dates)}
+    boards: dict[str, dict] = {}
+    for code, name, dt, pct in data:
+        row = boards.setdefault(code, {"code": code, "name": name,
+                                       "values": [None] * len(dates)})
+        if dt in idx:
+            row["values"][idx[dt]] = float(pct) if pct is not None else None
+    rows = list(boards.values())
+    rows.sort(key=lambda r: -sum(v for v in r["values"][-5:] if v is not None))
+    return {"dates": [dt.isoformat() for dt in dates], "rows": rows}
+
+
+def _intl_boards_calendar(market: str, btype: str, days: int):
+    t = _INTL_BOARD[market]
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT DISTINCT trade_date FROM {t['price']} "
+                        f"ORDER BY trade_date DESC LIMIT %s", (days,))
+            dates = sorted(r[0] for r in cur.fetchall())
+            if not dates:
+                return {"dates": [], "rows": []}
+            cur.execute(
+                f"SELECT m.board_code, b.board_name, p.trade_date, avg(p.pct_chg) "
+                f"FROM {t['member']} m JOIN {t['board']} b ON b.board_code = m.board_code "
+                f"JOIN {t['price']} p ON p.stock_code = m.stock_code "
+                f"  AND p.trade_date >= %s AND p.trade_date <= %s "
+                f"WHERE m.out_date IS NULL AND b.board_type = %s "
+                f"GROUP BY 1, 2, 3", (dates[0], dates[-1], btype))
+            data = cur.fetchall()
+    finally:
+        conn.close()
+    idx = {dt: i for i, dt in enumerate(dates)}
+    boards: dict[str, dict] = {}
+    for code, name, dt, pct in data:
+        row = boards.setdefault(code, {"code": code, "name": name,
+                                       "values": [None] * len(dates)})
+        if dt in idx:
+            row["values"][idx[dt]] = float(pct) if pct is not None else None
+    rows = list(boards.values())
+    rows.sort(key=lambda r: -sum(v for v in r["values"][-5:] if v is not None))
+    return {"dates": [dt.isoformat() for dt in dates], "rows": rows}
+
+
+@app.get("/api/boards/kline")
+def boards_kline(code: str = Query(..., max_length=24),
+                 days: int = Query(250, ge=20, le=1000),
+                 period: Literal["day", "week", "month"] = "day"):
+    """板块指数 K线。周/月为日线现聚合(板块无复权概念,数据 2018 年起)。"""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            if period == "day":
+                cur.execute(
+                    "SELECT trade_date, open, high, low, close, volume FROM board_daily "
+                    "WHERE board_code = %s ORDER BY trade_date DESC LIMIT %s", (code, days))
+            else:
+                unit = "week" if period == "week" else "month"
+                cur.execute(
+                    f"SELECT max(trade_date) AS d,"
+                    f" (array_agg(open ORDER BY trade_date))[1],"
+                    f" max(high), min(low),"
+                    f" (array_agg(close ORDER BY trade_date DESC))[1], sum(volume) "
+                    f"FROM board_daily WHERE board_code = %s "
+                    f"GROUP BY date_trunc('{unit}', trade_date) "
+                    f"ORDER BY d DESC LIMIT %s", (code, days))
+            rows = cur.fetchall()[::-1]
+            cur.execute("SELECT board_name FROM board WHERE board_code = %s", (code,))
+            name_row = cur.fetchone()
+    finally:
+        conn.close()
+    if not rows:
+        raise HTTPException(status_code=404, detail="未找到该板块的日线数据")
+    bars = [{"d": r[0].isoformat(),
+             "o": float(r[1]), "h": float(r[2]), "l": float(r[3]), "c": float(r[4]),
+             "v": int(r[5]) if r[5] is not None else 0} for r in rows]
+    return {"code": code, "name": name_row[0] if name_row else code,
+            "period": period, "adjusted": False, "bars": bars}
+
+
+@app.get("/api/boards/members")
+def boards_members(code: str = Query(..., max_length=24),
+                   date_: str | None = Query(None, alias="date", max_length=10),
+                   market: Literal["cn", "hk", "us"] = "cn"):
+    """板块现役成员股及其当日表现,按涨跌幅降序。港/美股 amount 用 收盘×量 近似。"""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            if market == "cn":
+                d = _board_latest_date(cur, date_)
+                cur.execute(
+                    "SELECT m.stock_code, s.name, p.pct_chg, p.amount, p.close "
+                    "FROM board_member m JOIN stock_basic s ON s.stock_code = m.stock_code "
+                    "LEFT JOIN daily_price p ON p.stock_code = m.stock_code AND p.trade_date = %s "
+                    "WHERE m.board_code = %s AND m.valid_to IS NULL "
+                    "ORDER BY p.pct_chg DESC NULLS LAST", (d, code))
+                rows = cur.fetchall()
+                cur.execute("SELECT board_name FROM board WHERE board_code = %s", (code,))
+            else:
+                t = _INTL_BOARD[market]
+                d = _intl_latest_date(cur, t["price"], date_)
+                cur.execute(
+                    f"SELECT m.stock_code, {t['name_expr']}, p.pct_chg, "
+                    f"p.close * p.volume AS amount, p.close "
+                    f"FROM {t['member']} m "
+                    f"JOIN {t['basic']} s ON s.stock_code = m.stock_code "
+                    f"LEFT JOIN {t['price']} p ON p.stock_code = m.stock_code AND p.trade_date = %s "
+                    f"WHERE m.board_code = %s AND m.out_date IS NULL "
+                    f"ORDER BY p.pct_chg DESC NULLS LAST", (d, code))
+                rows = cur.fetchall()
+                cur.execute(f"SELECT board_name FROM {t['board']} WHERE board_code = %s", (code,))
+            name_row = cur.fetchone()
+    finally:
+        conn.close()
+    return {"date": d.isoformat() if d else None,
+            "board_name": name_row[0] if name_row else code,
+            "items": [{"code": r[0], "name": r[1],
+                       "pct_chg": float(r[2]) if r[2] is not None else None,
+                       "amount": float(r[3]) if r[3] is not None else None,
+                       "close": float(r[4]) if r[4] is not None else None} for r in rows]}
+
+
+@app.get("/api/boards/fundflow")
+def boards_fundflow(btype: Literal["industry", "concept"],
+                    period: Literal["today", "5d", "20d"] = "today",
+                    market: Literal["cn", "hk", "us"] = "cn"):
+    """板块主力资金流:现役成员个股 capital_flow(富途源)按板块求和。
+
+    日期基准按该市场成员在 capital_flow 中的实际交易日取(三市场日历不同,
+    不能混用)。covered/members 标注成员覆盖度(回填期间可能不完整)。
+    金额单位随市场币种(cn=元 / hk=港元 / us=美元)。
+    """
+    n_days = {"today": 1, "5d": 5, "20d": 20}[period]
+    if market == "cn":
+        board_t, member_t = "board", "board_member"
+        open_cond = "valid_to IS NULL"
+    else:
+        t = _INTL_BOARD[market]
+        board_t, member_t = t["board"], t["member"]
+        open_cond = "out_date IS NULL"
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT DISTINCT cf.trade_date FROM capital_flow cf "
+                f"WHERE EXISTS (SELECT 1 FROM {member_t} mm "
+                f"              WHERE mm.stock_code = cf.stock_code AND mm.{open_cond}) "
+                f"ORDER BY cf.trade_date DESC LIMIT %s", (n_days,))
+            dates = sorted(r[0] for r in cur.fetchall())
+            if not dates:
+                return {"dates": [], "items": []}
+            sql = (f"SELECT b.board_code, b.board_name, sum(cf.main_net) AS main_net, "
+                   f"count(DISTINCT cf.stock_code) AS covered, "
+                   f"(SELECT count(*) FROM {member_t} m2 "
+                   f" WHERE m2.board_code = b.board_code AND m2.{open_cond}) AS members "
+                   f"FROM {board_t} b "
+                   f"JOIN {member_t} m ON m.board_code = b.board_code AND m.{open_cond} "
+                   f"JOIN capital_flow cf ON cf.stock_code = m.stock_code "
+                   f"  AND cf.trade_date >= %s AND cf.trade_date <= %s "
+                   f"WHERE b.board_type = %s")
+            params: list = [dates[0], dates[-1], btype]
+            if market == "cn" and btype == "concept":
+                sql += _CONCEPT_FILTER_SQL
+                params += [_GENERIC_CONCEPT_MAX_MEMBERS, list(_STYLE_LABEL_BOARDS)]
+            cur.execute(sql + " GROUP BY 1, 2 ORDER BY 3 DESC NULLS LAST", params)
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    return {"dates": [d.isoformat() for d in dates],
+            "items": [{"code": r[0], "name": r[1],
+                       "main_net": float(r[2]) if r[2] is not None else None,
+                       "covered": r[3], "members": r[4]} for r in rows]}
+
+
+@app.get("/api/boards/compare")
+def boards_compare(codes: str = Query(..., max_length=200),
+                   days: int = Query(250, ge=20, le=1000)):
+    """多板块收盘价序列(最多 6 个),供前端归一化画净值对比。"""
+    code_list = [c.strip() for c in codes.split(",") if c.strip()][:6]
+    if not code_list:
+        raise HTTPException(status_code=422, detail="codes 不能为空")
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            series = []
+            for c in code_list:
+                cur.execute(
+                    "SELECT trade_date, close FROM board_daily "
+                    "WHERE board_code = %s ORDER BY trade_date DESC LIMIT %s", (c, days))
+                rows = cur.fetchall()[::-1]
+                cur.execute("SELECT board_name FROM board WHERE board_code = %s", (c,))
+                nr = cur.fetchone()
+                series.append({"code": c, "name": nr[0] if nr else c,
+                               "dates": [r[0].isoformat() for r in rows],
+                               "closes": [float(r[1]) for r in rows]})
+    finally:
+        conn.close()
+    return {"series": series}
+
+
 _STATIC = Path(__file__).resolve().parent / "static"
 
 
