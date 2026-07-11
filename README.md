@@ -333,24 +333,30 @@ WHERE m.stock_code = '00700.HK' AND m.out_date IS NULL;
 
 ## 板块数据(行业/概念,支持板块轮动)
 
-设计:`docs/superpowers/specs/2026-07-10-board-rotation-design.md`。东财体系,
-行业 ~86 个 + 概念 ~450 个;全部为行情族(push2/push2his)接口,与个股日线共享限流预算。
+设计:`docs/superpowers/specs/2026-07-10-board-rotation-design.md`。
+**双源**(`ASTOCK_BOARD_SOURCE=em|futu`,默认 em,`board.source` 列区分,同库共存):
+
+| 源 | 体系 | 日线起点 | 资金流 | 依赖/风险 |
+|---|---|---|---|---|
+| `futu`(当前主用,2026-07-11 全量已入库) | 行业 131 + 概念 792(代码 SH.LISTxxxx) | 2018-01-02 | ❌ 无 | 本地 OpenD,零封禁;历史K线耗月度额度(~918 标的/月),低频接口 10 次/30s |
+| `em`(东财,解封后由守候脚本补) | 行业 86 + 概念 ~450(代码 BKxxxx) | ~2006 | ✅ 五档全历史 | 行情族限流/封禁(见"排错") |
 
 ### 四表速查
 
 | 表 | 内容 | 主键 |
 |---|---|---|
-| `board` | 板块字典(代码/名称/类型/是否在市) | board_code |
+| `board` | 板块字典(代码/名称/类型/源/是否在市) | board_code |
 | `board_member` | 成分**区间表**(valid_from/valid_to) | (board_code, stock_code, valid_from) |
-| `board_daily` | 板块指数日线(行业历史约到 2006;volume 单位股) | (board_code, trade_date) |
-| `board_fund_flow` | 板块资金流(主力/超大/大/中/小单净额与占比,元) | (board_code, trade_date) |
+| `board_daily` | 板块指数日线(volume 单位股) | (board_code, trade_date) |
+| `board_fund_flow` | 板块资金流(主力/超大/大/中/小单净额与占比,元;仅 em 源) | (board_code, trade_date) |
 
 ### 初始化与增量
 
 ```bash
 psql -U zhu -d astock -f 11_schema_board.sql
-ASTOCK_DB_USER=zhu .venv/bin/python 12_init_board.py --workers 3   # 全量,断点续传
-ASTOCK_DB_USER=zhu .venv/bin/python 13_board_update.py             # 每日增量
+ASTOCK_BOARD_SOURCE=futu ASTOCK_DB_USER=zhu .venv/bin/python 12_init_board.py --workers 1  # 富途全量(限频串行,~55min)
+ASTOCK_BOARD_SOURCE=futu ASTOCK_DB_USER=zhu .venv/bin/python 13_board_update.py            # 每日增量
+# 东财口径(解封后):不带 ASTOCK_BOARD_SOURCE 或 =em,可用 --workers 3
 ```
 
 ### 成分区间表用法
@@ -367,19 +373,23 @@ WHERE m.stock_code = '600519.SH' AND m.valid_to IS NULL;
 
 ### 已知限制
 
-1. **成分历史 = 观测历史**:东财只提供当前成分快照,`valid_from` 是本库首次观测到
-   纳入的日期(首次建库日的存量成分尤其如此),不是真实纳入日;停跑期间的变动归到
-   下一次观测日。
-2. **概念板块会生灭**:从东财列表消失的板块 `is_active=false`,历史数据保留;
-   回测跨板块生命周期时注意用 `is_active` 或数据实际日期范围过滤。
-3. **资金流历史深度依源**:`lmt=0` 拉全东财可用历史,各板块起点不一。
-4. 板块指数无复权概念,`board_daily` 即原始点位;板块内**无权重数据**(东财不提供),
-   需要加权口径时用成分股流通市值自行近似。
+1. **成分历史 = 观测历史**:两源都只提供当前成分快照,`valid_from` 是本库首次观测到
+   纳入的日期(首次建库日 2026-07-11 的存量成分尤其如此),不是真实纳入日;停跑期间
+   的变动归到下一次观测日。**as-of 查询在观测起点之前的日期返回空是正确行为**。
+2. **概念板块会生灭**:从源列表消失的板块 `is_active=false`,历史数据保留;富途列表
+   还存在少量"僵尸残留"板块(列表有、行情系统不认,无指数无成分),已标退场。
+3. **资金流历史深度依源**(em 源专属):`lmt=0` 拉全东财可用历史,各板块起点不一。
+4. 板块指数无复权概念,`board_daily` 即原始点位;板块内**无权重数据**,需要加权口径
+   时用成分股流通市值自行近似(交叉校验显示富途板块指数即市值加权,偏差 ≤0.03pp)。
+5. **富途接口坑位备忘**:板块代码 `request_history_kline` 的 `end=None` 返回 0 行
+   (必须显式传日期);`get_plate_stock` 与历史K线同为 10 次/30s 低频限频(各配独立
+   3.1s 节流时钟);OpenQuoteContext 有非守护线程,脚本收尾必须 `close_futu()`。
 
 ### 每日定时(cron 示例,合并主分支后安装)
 
 ```cron
-10 18 * * 1-5  cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 13_board_update.py >> update_board.log 2>&1
+# 19:30 起跑:避开港美股板块链的 18:50-19:20 富途限频窗口(账号级共享,跨会话约定)
+30 19 * * 1-5  cd /Users/zhu/own/my_stocks && ASTOCK_BOARD_SOURCE=futu ASTOCK_DB_USER=zhu .venv/bin/python 13_board_update.py >> update_board.log 2>&1
 ```
 
 ## 后续(第二期)
