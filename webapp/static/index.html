@@ -607,11 +607,14 @@ function renderRanks(items){
 }
 
 function renderCalendar(d){
-  const head = '<tr><th></th>' + d.dates.map(x=>`<th>${x.slice(5)}</th>`).join('') + '</tr>';
-  const rows = d.rows.slice(0, 80).map(r=>
-    `<tr><td class="nm" data-c="${r.code}" data-n="${r.name}">${r.name}</td>`+
-    r.values.map(v=>`<td style="background:${pctColor(v)}" title="${v==null?'—':v.toFixed(2)+'%'}">`+
-      `${v==null?'':(v>0?'+':'')+v.toFixed(1)}</td>`).join('')+'</tr>').join('');
+  // 从左到右 = 从新到旧(与报表列序一致,最新一天不会被右缘裁掉)
+  const dates = [...d.dates].reverse();
+  const head = '<tr><th></th>' + dates.map(x=>`<th>${x.slice(5)}</th>`).join('') + '</tr>';
+  const rows = d.rows.slice(0, 80).map(r=>{
+    const vals = [...r.values].reverse();
+    return `<tr><td class="nm" data-c="${r.code}" data-n="${r.name}">${r.name}</td>`+
+    vals.map(v=>`<td style="background:${pctColor(v)}" title="${v==null?'—':v.toFixed(2)+'%'}">`+
+      `${v==null?'':(v>0?'+':'')+v.toFixed(1)}</td>`).join('')+'</tr>';}).join('');
   $('#caltbl').innerHTML = head + rows;
   document.querySelectorAll('.cal td.nm').forEach(td=>td.onclick=()=>showBoardDetail(td.dataset.c, td.dataset.n));
 }
