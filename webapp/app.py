@@ -371,6 +371,17 @@ def _board_latest_date(cur, before=None):
     return cur.fetchone()[0]
 
 
+# 泛概念过滤:融资融券/MSCI/深股通这类全市场属性标签成员数千只,不是真主题,
+# 会在热力图/日历里淹没真正的概念板块。按现役成员数阈值剔除(存储器/CPO 约 180 只);
+# 市值/价格风格标签成员数不高但同样无主题信息,按名单剔除。
+_GENERIC_CONCEPT_MAX_MEMBERS = 400
+_STYLE_LABEL_BOARDS = ("大盘股", "中盘股", "小盘股", "微盘股", "高价股", "低价股")
+_CONCEPT_FILTER_SQL = (
+    " AND (SELECT count(*) FROM board_member m "
+    "      WHERE m.board_code = b.board_code AND m.valid_to IS NULL) <= %s"
+    " AND b.board_name <> ALL(%s)")
+
+
 @app.get("/api/boards/snapshot")
 def boards_snapshot(btype: Literal["industry", "concept"],
                     date_: str | None = Query(None, alias="date", max_length=10)):
@@ -379,11 +390,14 @@ def boards_snapshot(btype: Literal["industry", "concept"],
     try:
         with conn.cursor() as cur:
             d = _board_latest_date(cur, date_)
-            cur.execute(
-                "SELECT b.board_code, b.board_name, d.pct_chg, d.amount, d.turnover, d.close "
-                "FROM board_daily d JOIN board b USING (board_code) "
-                "WHERE d.trade_date = %s AND b.board_type = %s "
-                "ORDER BY d.pct_chg DESC NULLS LAST", (d, btype))
+            sql = ("SELECT b.board_code, b.board_name, d.pct_chg, d.amount, d.turnover, d.close "
+                   "FROM board_daily d JOIN board b USING (board_code) "
+                   "WHERE d.trade_date = %s AND b.board_type = %s")
+            params: list = [d, btype]
+            if btype == "concept":
+                sql += _CONCEPT_FILTER_SQL
+                params += [_GENERIC_CONCEPT_MAX_MEMBERS, list(_STYLE_LABEL_BOARDS)]
+            cur.execute(sql + " ORDER BY d.pct_chg DESC NULLS LAST", params)
             rows = cur.fetchall()
     finally:
         conn.close()
@@ -407,10 +421,14 @@ def boards_calendar(btype: Literal["industry", "concept"],
             dates = sorted(r[0] for r in cur.fetchall())
             if not dates:
                 return {"dates": [], "rows": []}
-            cur.execute(
-                "SELECT d.board_code, b.board_name, d.trade_date, d.pct_chg "
-                "FROM board_daily d JOIN board b USING (board_code) "
-                "WHERE b.board_type = %s AND d.trade_date >= %s", (btype, dates[0]))
+            sql = ("SELECT d.board_code, b.board_name, d.trade_date, d.pct_chg "
+                   "FROM board_daily d JOIN board b USING (board_code) "
+                   "WHERE b.board_type = %s AND d.trade_date >= %s")
+            params: list = [btype, dates[0]]
+            if btype == "concept":
+                sql += _CONCEPT_FILTER_SQL
+                params += [_GENERIC_CONCEPT_MAX_MEMBERS, list(_STYLE_LABEL_BOARDS)]
+            cur.execute(sql, params)
             data = cur.fetchall()
     finally:
         conn.close()

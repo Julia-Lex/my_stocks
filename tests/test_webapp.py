@@ -240,6 +240,17 @@ def test_boards_snapshot_bad_type():
     assert r.status_code == 422
 
 
+def test_boards_concept_excludes_generic():
+    """概念板块剔除泛概念(成员>400,如融资融券/MSCI),真主题(存储器/CPO)保留。"""
+    r = client.get("/api/boards/snapshot", params={"btype": "concept"})
+    names = [i["name"] for i in r.json()["items"]]
+    assert "融资融券" not in names and "转融券标的" not in names
+    assert "存储器" in names and "共封装光模块(CPO)" in names
+    rc = client.get("/api/boards/calendar", params={"btype": "concept", "days": 10})
+    cal_names = [row["name"] for row in rc.json()["rows"]]
+    assert "融资融券" not in cal_names
+
+
 def test_boards_calendar():
     r = client.get("/api/boards/calendar", params={"btype": "industry", "days": 20})
     assert r.status_code == 200
