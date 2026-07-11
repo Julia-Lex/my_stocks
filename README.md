@@ -318,6 +318,19 @@ WHERE index_code='SPX' AND in_date <= '2019-06-01' AND (out_date IS NULL OR out_
 
 限制:恒指族历史成分免费不可得——`note='snapshot-open'` 行的 in_date 是**建档日**非真实纳入日,从建档起 diff 累积;A股成分见板块数据层(另建)。
 
+## 港美板块(富途源,每市场分表)
+
+`hk_board`/`us_board`(231/262 个,行业+概念)+ `hk_board_member`/`us_board_member`(成分区间,5,066/8,362 条在册)。A 股板块见上一章(东财体系,独立建设)。
+
+```sql
+-- 个股反查(实测:腾讯 → 数码解决方案服务/腾讯概念/人工智能...)
+SELECT b.board_name, b.board_type FROM hk_board_member m
+JOIN hk_board b USING (board_code)
+WHERE m.stock_code = '00700.HK' AND m.out_date IS NULL;
+```
+
+限制:富途无板块历史成分——`note='snapshot-open'` 的 in_date 是建档日(2026-07-11),此后每日 diff 累积真实变更;`get_plate_stock` 有独立限频(10 次/30 秒),脚本已按 3.2s 节流。
+
 ## 板块数据(行业/概念,支持板块轮动)
 
 设计:`docs/superpowers/specs/2026-07-10-board-rotation-design.md`。东财体系,
