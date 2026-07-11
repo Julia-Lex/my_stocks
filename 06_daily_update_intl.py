@@ -175,6 +175,27 @@ def main() -> int:
         c.run_stock_todo(rows, task, make_updater(args.market, task, args.days),
                          args.workers, max_consecutive_errors=15)
 
+        if args.market == "hk":
+            # 当日成交额/换手率补列(腾讯日线源无此两列;东财 spot 一次调用全市场)
+            try:
+                spot = c.fetch_hk_spot_amount()
+                n = 0
+                with conn.cursor() as cur:
+                    for r2 in spot.itertuples(index=False):
+                        cur.execute(
+                            "UPDATE hk_daily_price SET amount=COALESCE(%s,amount), "
+                            "turnover=COALESCE(%s,turnover) "
+                            "WHERE stock_code=%s AND trade_date=%s",
+                            (getattr(r2, "amount", None), getattr(r2, "turnover", None),
+                             r2.stock_code, date.today()))
+                        n += cur.rowcount
+                conn.commit()
+                c.log.info("[hk] 当日成交额/换手率补列 %d 行(东财快照)", n)
+            except Exception as exc:  # noqa: BLE001
+                conn.rollback()
+                c.log.warning("[hk] 快照补列失败(东财行情族封禁时属预期,回填脚本会兜底): %s",
+                              str(exc)[:60])
+
         if not args.no_matview:
             c.log.info("[%s] 刷新周线/月线物化视图 ...", args.market)
             c.refresh_matviews(conn, c.MARKETS[args.market]["mviews"])

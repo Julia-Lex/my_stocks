@@ -2136,3 +2136,23 @@ def fetch_nb_hold(symbol: str) -> pd.DataFrame:
     df = df[keep].copy()
     df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.date
     return df.dropna(subset=["trade_date"])
+
+
+def fetch_hk_spot_amount() -> pd.DataFrame:
+    """港股全市场当日快照的成交额/换手率(东财 spot,一次分页调用)。
+    列: stock_code, amount, turnover。用于 06 的当日补列(腾讯日线源无此两列)。"""
+    import akshare as ak
+
+    df = with_retry(ak.stock_hk_spot_em)
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["stock_code", "amount", "turnover"])
+    ren = {"代码": "symbol", "成交额": "amount", "换手率": "turnover"}
+    df = df.rename(columns=ren)
+    keep = [c_ for c_ in ("symbol", "amount", "turnover") if c_ in df.columns]
+    df = df[keep].copy()
+    df["symbol"] = df["symbol"].astype(str).str.zfill(5)
+    df["stock_code"] = df["symbol"] + ".HK"
+    for col in ("amount", "turnover"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df[["stock_code"] + [c_ for c_ in ("amount", "turnover") if c_ in df.columns]]
