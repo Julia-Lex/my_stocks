@@ -325,10 +325,11 @@ def fetch_hk_names_cn() -> pd.DataFrame:
     """港股中文简称。返回列: stock_code, name_cn。
 
     hk_stock_basic.name 来自 HKEX 官方英文清单(常见缩写如 VGT,中文用户
-    无法检索),此函数补充中文名。主源:东财 spot 列表(全市场覆盖);
-    东财被封时(2026-07 实测 spot 与 push2his 同样连接级拒绝)退化为
-    腾讯源的 A+H 对照表(仅覆盖两地上市约 220 家,但包含最常检索的
-    A股同名场景)。调用方应把失败视为非致命(中文名缺失只影响中文搜索)。
+    无法检索),此函数补充中文名。源优先级(均为全市场或近似全市场):
+      1) 东财 spot 列表(2026-07 实测与 push2his 同被连接级封禁,解封后自动恢复)
+      2) 新浪港股列表(2798 只,含中文名称;2026-07-11 实测可用)
+      3) 腾讯 A+H 对照表(仅两地上市约 220 家,最后兜底)
+    调用方应把失败视为非致命(中文名缺失只影响中文搜索)。
     """
     import akshare as ak
 
@@ -336,9 +337,14 @@ def fetch_hk_names_cn() -> pd.DataFrame:
         df = with_retry(ak.stock_hk_spot_em, retries=2)
         df = df.rename(columns={"代码": "symbol", "名称": "name_cn"})
     except Exception as exc:  # noqa: BLE001
-        log.warning("东财港股列表不可用(%s),退化为腾讯 A+H 对照表", exc)
-        df = with_retry(ak.stock_zh_ah_name)
-        df = df.rename(columns={"代码": "symbol", "名称": "name_cn"})
+        log.warning("东财港股列表不可用(%s),改用新浪港股列表", exc)
+        try:
+            df = with_retry(ak.stock_hk_spot, retries=2)
+            df = df.rename(columns={"代码": "symbol", "中文名称": "name_cn"})
+        except Exception as exc2:  # noqa: BLE001
+            log.warning("新浪港股列表也不可用(%s),退化为腾讯 A+H 对照表", exc2)
+            df = with_retry(ak.stock_zh_ah_name)
+            df = df.rename(columns={"代码": "symbol", "名称": "name_cn"})
     df["symbol"] = df["symbol"].astype(str).str.zfill(5)
     df["stock_code"] = df["symbol"] + ".HK"
     df["name_cn"] = df["name_cn"].astype(str).str.strip()
