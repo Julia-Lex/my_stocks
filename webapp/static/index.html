@@ -131,6 +131,10 @@
   .todo-item.done .tc { color:var(--muted); text-decoration:line-through; }
   .todo-item .del { color:var(--muted); cursor:pointer; visibility:hidden; padding:0 2px; }
   .todo-item:hover .del { visibility:visible; }
+  .todo-item .rpt { font-size:12.5px; color:var(--accent); text-decoration:none;
+                    white-space:nowrap; }
+  .todo-item .rpt:hover { text-decoration:underline; }
+  .todo-item.done .rpt { text-decoration:none; }
   .ktip { position:absolute; display:none; pointer-events:none; background:rgba(20,20,20,.85);
           color:#fff; font-size:12px; padding:6px 9px; border-radius:8px; z-index:5;
           white-space:nowrap; line-height:1.6; }
@@ -761,7 +765,8 @@ function renderTodos(items){
     <div class="todo-item${t.done?' done':''}" data-id="${t.id}">
       <input type="checkbox" ${t.done?'checked':''}>
       <div class="tc">${t.content.replace(/</g,'&lt;')}
-        <div class="tt">${t.done ? '完成于 '+t.done_at : '创建于 '+t.created_at}</div></div>
+        <div class="tt">${t.done ? '完成于 '+t.done_at : '创建于 '+t.created_at}${
+          t.report ? ' · <a class="rpt" href="/reports/'+encodeURIComponent(t.report)+'" target="_blank">📄 查看分析报告</a>' : ''}</div></div>
       <span class="del" title="删除">✕</span>
     </div>`).join('')
     : '<div class="note">暂无待办。把想做的分析记在这里,做完勾掉。</div>';
