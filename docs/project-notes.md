@@ -86,8 +86,11 @@
    `curl -X PATCH localhost:8500/api/todos/{id} -H 'Content-Type: application/json' -d '{"done": true, "report": "YYYY-MM-DD-<slug>.html"}'`
    (待办 id 用 `GET /api/todos` 查;report 只填文件名,页面经 `/reports/{name}` 提供)
 3. 页面上该待办即显示「📄 查看分析报告」链接。
-4. **定时验证任务**(2026-07-12 起):用户读完报告后会在待办下挂未来校验点(`todo_schedule` 表,一条待办多个)。分析会话应关注**到期未完成**的验证任务(页面红色高亮;`GET /api/todos` 里 `schedules[]` 的 `due_date <= 今天 且 done=false`),完成验证后:
-   `curl -X PATCH localhost:8500/api/schedules/{sid} -d '{"done": true, "report": "验证报告文件名.html"}'`(报告可选,同样放 docs/analysis/)。
+4. **定时验证任务**(`todo_schedule` 表,一条待办可挂多个;字段是 **`due_at`** 带时间,不是 due_date)。完整接口——**所有写请求必须带 `-H 'Content-Type: application/json'`,漏了会 422**:
+   - 查:`GET /api/todos`,每条待办的 `schedules[]` 内含 `{id, content, due_at, done, report}`;**到期未完成** = `due_at <= 现在 且 done=false`(页面红色高亮),是分析会话要跟进的
+   - 增:`curl -X POST localhost:8500/api/todos/{待办id}/schedules -H 'Content-Type: application/json' -d '{"content": "复盘解禁后一周实际走势", "due_at": "2026-08-12T09:30"}'`(due_at 为本地时间 `YYYY-MM-DDTHH:MM`)
+   - 完成/挂验证报告:`curl -X PATCH localhost:8500/api/schedules/{sid} -H 'Content-Type: application/json' -d '{"done": true, "report": "验证报告文件名.html"}'`(report 可选,同放 docs/analysis/;也可传 content/due_at 改内容与时刻)
+   - 删:`curl -X DELETE localhost:8500/api/schedules/{sid}`
 
 注意:webapp 运行目录的 `docs/analysis/` 必须包含该文件——报告合入 main 后,提醒可视化会话把 main 合进 webapp 分支(两者同分支则无需)。
 
