@@ -144,6 +144,7 @@
   .sch { display:flex; align-items:center; gap:7px; padding:3px 0; font-size:12.5px; }
   .sch input[type=checkbox] { accent-color:var(--accent); cursor:pointer; }
   .sch .sd { color:var(--muted); flex:none; font-variant-numeric:tabular-nums; }
+  .sch .sid { color:#bbb; font-size:11px; flex:none; font-variant-numeric:tabular-nums; }
   .sch .sc { flex:1; min-width:0; }
   .sch.done .sc, .sch.done .sd { color:var(--muted); text-decoration:line-through; }
   .sch.late .sd, .sch.late .sc { color:var(--neg); font-weight:600; }
@@ -792,6 +793,7 @@ function schHtml(s){
   return `<div class="sch${s.done?' done':''}${late?' late':''}" data-sid="${s.id}"
        data-due="${s.due_at}" data-content="${s.content.replace(/"/g,'&quot;')}">
     <input type="checkbox" ${s.done?'checked':''}>
+    <span class="sid">#${s.id}</span>
     <span class="sd" title="点击编辑">⏰ ${s.due_at}</span>
     <span class="sc" title="点击编辑">${s.content.replace(/</g,'&lt;')}</span>
     ${s.report ? `<a class="rpt" href="/reports/${encodeURIComponent(s.report)}" target="_blank">📄 报告</a>` : ''}
@@ -821,7 +823,7 @@ function renderTodos(items){
     <div class="todo-item${t.done?' done':''}" data-id="${t.id}">
       <input type="checkbox" ${t.done?'checked':''}>
       <div class="tc"><span class="ct">${t.content.replace(/</g,'&lt;')}</span>
-        <div class="tt">${t.done ? '完成于 '+t.done_at : '创建于 '+t.created_at}${
+        <div class="tt">#${t.id} · ${t.done ? '完成于 '+t.done_at : '创建于 '+t.created_at}${
           t.report ? ' · <a class="rpt" href="/reports/'+encodeURIComponent(t.report)+'" target="_blank">📄 查看分析报告</a>' : ''}</div>
         <div class="sch-list"${t.schedules.length?'':' style="border-top:none;padding-top:0"'}>${t.schedules.map(schHtml).join('')}
           <span class="sch-add" data-id="${t.id}">⏰ 加定时验证</span></div></div>
