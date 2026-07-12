@@ -517,15 +517,19 @@ class TodoPatch(BaseModel):
     report: str | None = None    # docs/analysis/ 下的报告文件名
 
 
+from datetime import datetime  # noqa: E402
+
+
 class ScheduleNew(BaseModel):
     content: str
-    due_date: date
+    due_at: datetime             # 到期时刻(datetime-local 的本地时间)
 
 
 class SchedulePatch(BaseModel):
     done: bool | None = None
     report: str | None = None
-    due_date: date | None = None
+    due_at: datetime | None = None
+    content: str | None = None
 
 
 @app.get("/api/todos")
@@ -537,12 +541,13 @@ def todos_get():
             cur.execute("SELECT id, content, done, created_at, done_at, report FROM todo "
                         "ORDER BY done, CASE WHEN done THEN done_at END DESC, created_at DESC")
             rows = cur.fetchall()
-            cur.execute("SELECT id, todo_id, content, due_date, done, done_at, report "
-                        "FROM todo_schedule ORDER BY due_date, id")
+            cur.execute("SELECT id, todo_id, content, due_at, done, done_at, report "
+                        "FROM todo_schedule ORDER BY due_at, id")
             sched: dict[int, list] = {}
             for s in cur.fetchall():
                 sched.setdefault(s[1], []).append(
-                    {"id": s[0], "content": s[2], "due_date": s[3].isoformat(),
+                    {"id": s[0], "content": s[2],
+                     "due_at": s[3].isoformat()[:16].replace("T", " "),
                      "done": s[4],
                      "done_at": s[5].isoformat()[:16].replace("T", " ") if s[5] else None,
                      "report": s[6]})
@@ -566,8 +571,8 @@ def schedule_add(tid: int, s: ScheduleNew):
             cur.execute("SELECT 1 FROM todo WHERE id = %s", (tid,))
             if not cur.fetchone():
                 raise HTTPException(status_code=404, detail="待办不存在")
-            cur.execute("INSERT INTO todo_schedule (todo_id, content, due_date) "
-                        "VALUES (%s, %s, %s) RETURNING id", (tid, content[:500], s.due_date))
+            cur.execute("INSERT INTO todo_schedule (todo_id, content, due_at) "
+                        "VALUES (%s, %s, %s) RETURNING id", (tid, content[:500], s.due_at))
             sid = cur.fetchone()[0]
         conn.commit()
     finally:
@@ -587,9 +592,12 @@ def schedule_patch(sid: int, p: SchedulePatch):
             if p.report is not None:
                 cur.execute("UPDATE todo_schedule SET report = NULLIF(%s, '') WHERE id = %s",
                             (p.report.strip()[:200], sid))
-            if p.due_date is not None:
-                cur.execute("UPDATE todo_schedule SET due_date = %s WHERE id = %s",
-                            (p.due_date, sid))
+            if p.due_at is not None:
+                cur.execute("UPDATE todo_schedule SET due_at = %s WHERE id = %s",
+                            (p.due_at, sid))
+            if p.content is not None and p.content.strip():
+                cur.execute("UPDATE todo_schedule SET content = %s WHERE id = %s",
+                            (p.content.strip()[:500], sid))
         conn.commit()
     finally:
         conn.close()

@@ -304,18 +304,25 @@ def test_todo_crud():
 
 
 def test_todo_schedules():
-    """定时验证任务:一条待办挂多个,增/勾选/挂报告/删,随待办级联删除。"""
+    """定时验证任务:一条待办挂多个,增/编辑/勾选/挂报告/删,随待办级联删除。"""
     tid = client.post("/api/todos", json={"content": "测试-带定时验证"}).json()["id"]
     s1 = client.post(f"/api/todos/{tid}/schedules",
-                     json={"content": "一周后复盘走势", "due_date": "2026-07-19"})
+                     json={"content": "一周后复盘走势", "due_at": "2026-07-19T09:30"})
     assert s1.status_code == 200
     sid1 = s1.json()["id"]
     s2 = client.post(f"/api/todos/{tid}/schedules",
-                     json={"content": "一月后验证预测", "due_date": "2026-08-12"})
+                     json={"content": "一月后验证预测", "due_at": "2026-08-12T15:00"})
     assert s2.status_code == 200
     todo = next(i for i in client.get("/api/todos").json()["items"] if i["id"] == tid)
     assert [s["content"] for s in todo["schedules"]] == ["一周后复盘走势", "一月后验证预测"]
-    assert todo["schedules"][0]["due_date"] == "2026-07-19"
+    assert todo["schedules"][0]["due_at"] == "2026-07-19 09:30"   # 带时间
+    # 编辑内容与到期时刻
+    r = client.patch(f"/api/schedules/{sid1}",
+                     json={"content": "改为十天后复盘", "due_at": "2026-07-22T10:00"})
+    assert r.status_code == 200
+    todo = next(i for i in client.get("/api/todos").json()["items"] if i["id"] == tid)
+    s = next(x for x in todo["schedules"] if x["id"] == sid1)
+    assert s["content"] == "改为十天后复盘" and s["due_at"] == "2026-07-22 10:00"
     # 勾选 + 挂验证报告
     r = client.patch(f"/api/schedules/{sid1}",
                      json={"done": True, "report": "2026-07-11-minimax-unlock.html"})
@@ -329,10 +336,10 @@ def test_todo_schedules():
     # 待办删除级联清掉剩余定时任务
     client.delete(f"/api/todos/{tid}")
     assert all(i["id"] != tid for i in client.get("/api/todos").json()["items"])
-    # 非法日期
+    # 非法时间
     tid2 = client.post("/api/todos", json={"content": "测试-非法日期"}).json()["id"]
     assert client.post(f"/api/todos/{tid2}/schedules",
-                       json={"content": "x", "due_date": "not-a-date"}).status_code == 422
+                       json={"content": "x", "due_at": "not-a-date"}).status_code == 422
     client.delete(f"/api/todos/{tid2}")
 
 

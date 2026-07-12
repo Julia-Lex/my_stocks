@@ -154,6 +154,8 @@
              padding:3px 8px; font-size:12.5px; }
   .sch-form button { border:none; background:var(--accent); color:#fff; border-radius:6px;
              padding:0 12px; font-size:12px; cursor:pointer; }
+  .sch-form button.ghost { background:#fff; color:var(--muted); border:1px solid var(--border); }
+  .sch .sd, .sch .sc { cursor:text; }
   .ktip { position:absolute; display:none; pointer-events:none; background:rgba(20,20,20,.85);
           color:#fff; font-size:12px; padding:6px 9px; border-radius:8px; z-index:5;
           white-space:nowrap; line-height:1.6; }
@@ -779,15 +781,35 @@ async function loadTodos(){
     renderTodos((await r.json()).items);
   }catch(ex){ err(ex.message); }
 }
-const todayStr = () => new Date().toLocaleDateString('sv');   // 本地时区 YYYY-MM-DD
+const nowStr = () => new Date().toLocaleString('sv').slice(0,16);   // 本地 YYYY-MM-DD HH:MM
 function schHtml(s){
-  const late = !s.done && s.due_date <= todayStr();
-  return `<div class="sch${s.done?' done':''}${late?' late':''}" data-sid="${s.id}">
+  const late = !s.done && s.due_at <= nowStr();
+  return `<div class="sch${s.done?' done':''}${late?' late':''}" data-sid="${s.id}"
+       data-due="${s.due_at}" data-content="${s.content.replace(/"/g,'&quot;')}">
     <input type="checkbox" ${s.done?'checked':''}>
-    <span class="sd">⏰ ${s.due_date}</span>
-    <span class="sc">${s.content.replace(/</g,'&lt;')}</span>
+    <span class="sd" title="点击编辑">⏰ ${s.due_at}</span>
+    <span class="sc" title="点击编辑">${s.content.replace(/</g,'&lt;')}</span>
     ${s.report ? `<a class="rpt" href="/reports/${encodeURIComponent(s.report)}" target="_blank">📄 报告</a>` : ''}
     <span class="del" title="删除">✕</span></div>`;
+}
+// 定时验证的添加/编辑共用表单。onSubmit(due_at, content);取消=移除表单
+function schForm(prefDue, prefText, onSubmit){
+  const f = document.createElement('div');
+  f.className = 'sch-form';
+  f.innerHTML = `<input type="datetime-local" value="${prefDue}">
+    <input type="text" placeholder="验证内容,如:复盘解禁后一周实际走势 vs 预测">
+    <button>保存</button><button class="ghost">取消</button>`;
+  const [di, ti] = f.querySelectorAll('input');
+  ti.value = prefText;
+  const [ok, cancel] = f.querySelectorAll('button');
+  ok.onclick = ()=>{ if(ti.value.trim() && di.value) onSubmit(di.value, ti.value.trim()); };
+  cancel.onclick = ()=>f.remove();
+  ti.addEventListener('keydown', e=>{
+    if(e.key==='Enter') ok.onclick();
+    if(e.key==='Escape') f.remove();
+  });
+  di.addEventListener('keydown', e=>{ if(e.key==='Escape') f.remove(); });
+  return f;
 }
 function renderTodos(items){
   $('#todolist').innerHTML = items.length ? items.map(t=>`
@@ -823,25 +845,34 @@ function renderTodos(items){
     await fetch(`/api/schedules/${el.closest('.sch').dataset.sid}`, {method:'DELETE'});
     loadTodos();
   });
+  // 点日期/内容 → 行内编辑(保存/取消/Esc)
+  document.querySelectorAll('.sch .sd, .sch .sc').forEach(el=>el.onclick = ()=>{
+    const row = el.closest('.sch');
+    if(row.nextElementSibling?.className === 'sch-form') return;
+    const f = schForm(row.dataset.due.replace(' ','T'), row.dataset.content, async (due, text)=>{
+      await fetch(`/api/schedules/${row.dataset.sid}`, {method:'PATCH',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({due_at: due, content: text})});
+      loadTodos();
+    });
+    row.after(f);
+    row.style.display = 'none';
+    f.querySelector('button.ghost').addEventListener('click', ()=>{ row.style.display=''; });
+  });
+  // 加定时验证:再次点击可收起,表单带取消
   document.querySelectorAll('.sch-add').forEach(el=>el.onclick = ()=>{
-    if(el.previousElementSibling?.className === 'sch-form') return;
-    const f = document.createElement('div');
-    f.className = 'sch-form';
-    const week = new Date(Date.now() + 7*86400e3).toLocaleDateString('sv');
-    f.innerHTML = `<input type="date" value="${week}"><input type="text"
-      placeholder="验证内容,如:复盘解禁后一周实际走势 vs 预测"><button>添加</button>`;
-    el.before(f);
-    const [di, ti] = f.querySelectorAll('input');
-    const submit = async ()=>{
-      if(!ti.value.trim() || !di.value) return;
+    const prev = el.previousElementSibling;
+    if(prev?.className === 'sch-form'){ prev.remove(); return; }
+    const week = new Date(Date.now() + 7*86400e3);
+    const pref = week.toLocaleDateString('sv') + 'T09:00';
+    const f = schForm(pref, '', async (due, text)=>{
       await fetch(`/api/todos/${el.dataset.id}/schedules`, {method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({content: ti.value.trim(), due_date: di.value})});
+        body: JSON.stringify({content: text, due_at: due})});
       loadTodos();
-    };
-    f.querySelector('button').onclick = submit;
-    ti.addEventListener('keydown', e=>{ if(e.key==='Enter') submit(); });
-    ti.focus();
+    });
+    el.before(f);
+    f.querySelectorAll('input')[1].focus();
   });
 }
 async function addTodo(){

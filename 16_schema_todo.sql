@@ -20,10 +20,19 @@ CREATE TABLE IF NOT EXISTS todo_schedule (
     id         BIGSERIAL PRIMARY KEY,
     todo_id    BIGINT      NOT NULL REFERENCES todo(id) ON DELETE CASCADE,
     content    TEXT        NOT NULL,
-    due_date   DATE        NOT NULL,
+    due_at     TIMESTAMPTZ NOT NULL,       -- 到期时刻(日期+时间)
     done       BOOLEAN     NOT NULL DEFAULT FALSE,
     done_at    TIMESTAMPTZ,
     report     TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_todo_schedule_todo ON todo_schedule (todo_id, due_date);
+CREATE INDEX IF NOT EXISTS idx_todo_schedule_todo ON todo_schedule (todo_id, due_at);
+
+-- 迁移:早期版本 due_date DATE → due_at TIMESTAMPTZ(幂等)
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_name = 'todo_schedule' AND column_name = 'due_date') THEN
+    ALTER TABLE todo_schedule RENAME COLUMN due_date TO due_at;
+    ALTER TABLE todo_schedule ALTER COLUMN due_at TYPE TIMESTAMPTZ USING due_at::timestamptz;
+  END IF;
+END $$;
