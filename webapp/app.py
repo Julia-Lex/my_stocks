@@ -517,22 +517,95 @@ class TodoPatch(BaseModel):
     report: str | None = None    # docs/analysis/ 下的报告文件名
 
 
+class ScheduleNew(BaseModel):
+    content: str
+    due_date: date
+
+
+class SchedulePatch(BaseModel):
+    done: bool | None = None
+    report: str | None = None
+    due_date: date | None = None
+
+
 @app.get("/api/todos")
 def todos_get():
-    """未完成在前(新→旧),已完成沉底(完成时间新→旧)。"""
+    """未完成在前(新→旧),已完成沉底(完成时间新→旧);嵌套定时验证任务(按到期日)。"""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT id, content, done, created_at, done_at, report FROM todo "
                         "ORDER BY done, CASE WHEN done THEN done_at END DESC, created_at DESC")
             rows = cur.fetchall()
+            cur.execute("SELECT id, todo_id, content, due_date, done, done_at, report "
+                        "FROM todo_schedule ORDER BY due_date, id")
+            sched: dict[int, list] = {}
+            for s in cur.fetchall():
+                sched.setdefault(s[1], []).append(
+                    {"id": s[0], "content": s[2], "due_date": s[3].isoformat(),
+                     "done": s[4],
+                     "done_at": s[5].isoformat()[:16].replace("T", " ") if s[5] else None,
+                     "report": s[6]})
     finally:
         conn.close()
     return {"items": [{"id": r[0], "content": r[1], "done": r[2],
                        "created_at": r[3].isoformat()[:16].replace("T", " "),
                        "done_at": r[4].isoformat()[:16].replace("T", " ") if r[4] else None,
-                       "report": r[5]}
+                       "report": r[5], "schedules": sched.get(r[0], [])}
                       for r in rows]}
+
+
+@app.post("/api/todos/{tid}/schedules")
+def schedule_add(tid: int, s: ScheduleNew):
+    content = s.content.strip()
+    if not content:
+        raise HTTPException(status_code=422, detail="内容不能为空")
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM todo WHERE id = %s", (tid,))
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="待办不存在")
+            cur.execute("INSERT INTO todo_schedule (todo_id, content, due_date) "
+                        "VALUES (%s, %s, %s) RETURNING id", (tid, content[:500], s.due_date))
+            sid = cur.fetchone()[0]
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, "id": sid}
+
+
+@app.patch("/api/schedules/{sid}")
+def schedule_patch(sid: int, p: SchedulePatch):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            if p.done is not None:
+                cur.execute("UPDATE todo_schedule SET done = %s, "
+                            "done_at = CASE WHEN %s THEN now() END WHERE id = %s",
+                            (p.done, p.done, sid))
+            if p.report is not None:
+                cur.execute("UPDATE todo_schedule SET report = NULLIF(%s, '') WHERE id = %s",
+                            (p.report.strip()[:200], sid))
+            if p.due_date is not None:
+                cur.execute("UPDATE todo_schedule SET due_date = %s WHERE id = %s",
+                            (p.due_date, sid))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.delete("/api/schedules/{sid}")
+def schedule_del(sid: int):
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM todo_schedule WHERE id = %s", (sid,))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
 
 
 @app.post("/api/todos")

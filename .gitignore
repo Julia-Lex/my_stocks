@@ -3,3 +3,4 @@ __pycache__/
 *.log
 .env
 docs/analysis/*_data.json
+.playwright-mcp/

@@ -135,6 +135,25 @@
                     white-space:nowrap; }
   .todo-item .rpt:hover { text-decoration:underline; }
   .todo-item.done .rpt { text-decoration:none; }
+  /* 定时验证任务 */
+  .sch-list { margin-top:8px; border-top:1px dashed #eee; padding-top:6px; }
+  .sch { display:flex; align-items:center; gap:7px; padding:3px 0; font-size:12.5px; }
+  .sch input[type=checkbox] { accent-color:var(--accent); cursor:pointer; }
+  .sch .sd { color:var(--muted); flex:none; font-variant-numeric:tabular-nums; }
+  .sch .sc { flex:1; min-width:0; }
+  .sch.done .sc, .sch.done .sd { color:var(--muted); text-decoration:line-through; }
+  .sch.late .sd, .sch.late .sc { color:var(--neg); font-weight:600; }
+  .sch .del { color:var(--muted); cursor:pointer; visibility:hidden; }
+  .sch:hover .del { visibility:visible; }
+  .sch-add { color:var(--accent); font-size:12px; cursor:pointer; display:inline-block;
+             padding:3px 0; }
+  .sch-form { display:flex; gap:6px; padding:4px 0; }
+  .sch-form input[type=date] { border:1px solid var(--border); border-radius:6px;
+             padding:3px 6px; font-size:12.5px; }
+  .sch-form input[type=text] { flex:1; border:1px solid var(--border); border-radius:6px;
+             padding:3px 8px; font-size:12.5px; }
+  .sch-form button { border:none; background:var(--accent); color:#fff; border-radius:6px;
+             padding:0 12px; font-size:12px; cursor:pointer; }
   .ktip { position:absolute; display:none; pointer-events:none; background:rgba(20,20,20,.85);
           color:#fff; font-size:12px; padding:6px 9px; border-radius:8px; z-index:5;
           white-space:nowrap; line-height:1.6; }
@@ -760,25 +779,69 @@ async function loadTodos(){
     renderTodos((await r.json()).items);
   }catch(ex){ err(ex.message); }
 }
+const todayStr = () => new Date().toLocaleDateString('sv');   // 本地时区 YYYY-MM-DD
+function schHtml(s){
+  const late = !s.done && s.due_date <= todayStr();
+  return `<div class="sch${s.done?' done':''}${late?' late':''}" data-sid="${s.id}">
+    <input type="checkbox" ${s.done?'checked':''}>
+    <span class="sd">⏰ ${s.due_date}</span>
+    <span class="sc">${s.content.replace(/</g,'&lt;')}</span>
+    ${s.report ? `<a class="rpt" href="/reports/${encodeURIComponent(s.report)}" target="_blank">📄 报告</a>` : ''}
+    <span class="del" title="删除">✕</span></div>`;
+}
 function renderTodos(items){
   $('#todolist').innerHTML = items.length ? items.map(t=>`
     <div class="todo-item${t.done?' done':''}" data-id="${t.id}">
       <input type="checkbox" ${t.done?'checked':''}>
       <div class="tc">${t.content.replace(/</g,'&lt;')}
         <div class="tt">${t.done ? '完成于 '+t.done_at : '创建于 '+t.created_at}${
-          t.report ? ' · <a class="rpt" href="/reports/'+encodeURIComponent(t.report)+'" target="_blank">📄 查看分析报告</a>' : ''}</div></div>
+          t.report ? ' · <a class="rpt" href="/reports/'+encodeURIComponent(t.report)+'" target="_blank">📄 查看分析报告</a>' : ''}</div>
+        <div class="sch-list"${t.schedules.length?'':' style="border-top:none;padding-top:0"'}>${t.schedules.map(schHtml).join('')}
+          <span class="sch-add" data-id="${t.id}">⏰ 加定时验证</span></div></div>
       <span class="del" title="删除">✕</span>
     </div>`).join('')
     : '<div class="note">暂无待办。把想做的分析记在这里,做完勾掉。</div>';
-  document.querySelectorAll('.todo-item input[type=checkbox]').forEach(cb=>cb.onchange = async e=>{
+  document.querySelectorAll('.todo-item > input[type=checkbox]').forEach(cb=>cb.onchange = async e=>{
     const id = e.target.closest('.todo-item').dataset.id;
     await fetch(`/api/todos/${id}`, {method:'PATCH',
       headers:{'Content-Type':'application/json'}, body: JSON.stringify({done: e.target.checked})});
     loadTodos();
   });
-  document.querySelectorAll('.todo-item .del').forEach(el=>el.onclick = async ()=>{
+  document.querySelectorAll('.todo-item > .del').forEach(el=>el.onclick = async ()=>{
+    if(!confirm('删除该待办及其全部定时验证?')) return;
     await fetch(`/api/todos/${el.closest('.todo-item').dataset.id}`, {method:'DELETE'});
     loadTodos();
+  });
+  // 定时验证:勾选/删除/新增
+  document.querySelectorAll('.sch input[type=checkbox]').forEach(cb=>cb.onchange = async e=>{
+    const sid = e.target.closest('.sch').dataset.sid;
+    await fetch(`/api/schedules/${sid}`, {method:'PATCH',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({done: e.target.checked})});
+    loadTodos();
+  });
+  document.querySelectorAll('.sch .del').forEach(el=>el.onclick = async ()=>{
+    await fetch(`/api/schedules/${el.closest('.sch').dataset.sid}`, {method:'DELETE'});
+    loadTodos();
+  });
+  document.querySelectorAll('.sch-add').forEach(el=>el.onclick = ()=>{
+    if(el.previousElementSibling?.className === 'sch-form') return;
+    const f = document.createElement('div');
+    f.className = 'sch-form';
+    const week = new Date(Date.now() + 7*86400e3).toLocaleDateString('sv');
+    f.innerHTML = `<input type="date" value="${week}"><input type="text"
+      placeholder="验证内容,如:复盘解禁后一周实际走势 vs 预测"><button>添加</button>`;
+    el.before(f);
+    const [di, ti] = f.querySelectorAll('input');
+    const submit = async ()=>{
+      if(!ti.value.trim() || !di.value) return;
+      await fetch(`/api/todos/${el.dataset.id}/schedules`, {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({content: ti.value.trim(), due_date: di.value})});
+      loadTodos();
+    };
+    f.querySelector('button').onclick = submit;
+    ti.addEventListener('keydown', e=>{ if(e.key==='Enter') submit(); });
+    ti.focus();
   });
 }
 async function addTodo(){

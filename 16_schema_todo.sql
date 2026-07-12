@@ -13,3 +13,17 @@ CREATE TABLE IF NOT EXISTS todo (
 
 -- 关联分析报告:docs/analysis/ 下的文件名(webapp 经 /reports/{name} 提供)
 ALTER TABLE todo ADD COLUMN IF NOT EXISTS report TEXT;
+
+-- 定时验证任务:报告阅读后的未来校验点,一条待办可挂多个。
+-- due_date 到期未完成的在页面高亮;验证完成后同样可挂报告。
+CREATE TABLE IF NOT EXISTS todo_schedule (
+    id         BIGSERIAL PRIMARY KEY,
+    todo_id    BIGINT      NOT NULL REFERENCES todo(id) ON DELETE CASCADE,
+    content    TEXT        NOT NULL,
+    due_date   DATE        NOT NULL,
+    done       BOOLEAN     NOT NULL DEFAULT FALSE,
+    done_at    TIMESTAMPTZ,
+    report     TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_todo_schedule_todo ON todo_schedule (todo_id, due_date);
