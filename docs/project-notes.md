@@ -86,6 +86,8 @@
    `curl -X PATCH localhost:8500/api/todos/{id} -H 'Content-Type: application/json' -d '{"done": true, "report": "YYYY-MM-DD-<slug>.html"}'`
    (待办 id 用 `GET /api/todos` 查;report 只填文件名,页面经 `/reports/{name}` 提供)
 3. 页面上该待办即显示「📄 查看分析报告」链接。
+4. **定时验证任务**(2026-07-12 起):用户读完报告后会在待办下挂未来校验点(`todo_schedule` 表,一条待办多个)。分析会话应关注**到期未完成**的验证任务(页面红色高亮;`GET /api/todos` 里 `schedules[]` 的 `due_date <= 今天 且 done=false`),完成验证后:
+   `curl -X PATCH localhost:8500/api/schedules/{sid} -d '{"done": true, "report": "验证报告文件名.html"}'`(报告可选,同样放 docs/analysis/)。
 
 注意:webapp 运行目录的 `docs/analysis/` 必须包含该文件——报告合入 main 后,提醒可视化会话把 main 合进 webapp 分支(两者同分支则无需)。
 
