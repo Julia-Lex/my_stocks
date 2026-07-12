@@ -10,3 +10,6 @@ CREATE TABLE IF NOT EXISTS todo (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     done_at    TIMESTAMPTZ
 );
+
+-- 关联分析报告:docs/analysis/ 下的文件名(webapp 经 /reports/{name} 提供)
+ALTER TABLE todo ADD COLUMN IF NOT EXISTS report TEXT;

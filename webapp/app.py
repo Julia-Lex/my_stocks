@@ -513,7 +513,8 @@ class TodoNew(BaseModel):
 
 
 class TodoPatch(BaseModel):
-    done: bool
+    done: bool | None = None
+    report: str | None = None    # docs/analysis/ 下的报告文件名
 
 
 @app.get("/api/todos")
@@ -522,14 +523,15 @@ def todos_get():
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT id, content, done, created_at, done_at FROM todo "
+            cur.execute("SELECT id, content, done, created_at, done_at, report FROM todo "
                         "ORDER BY done, CASE WHEN done THEN done_at END DESC, created_at DESC")
             rows = cur.fetchall()
     finally:
         conn.close()
     return {"items": [{"id": r[0], "content": r[1], "done": r[2],
                        "created_at": r[3].isoformat()[:16].replace("T", " "),
-                       "done_at": r[4].isoformat()[:16].replace("T", " ") if r[4] else None}
+                       "done_at": r[4].isoformat()[:16].replace("T", " ") if r[4] else None,
+                       "report": r[5]}
                       for r in rows]}
 
 
@@ -554,12 +556,30 @@ def todos_patch(tid: int, p: TodoPatch):
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("UPDATE todo SET done = %s, done_at = CASE WHEN %s THEN now() END "
-                        "WHERE id = %s", (p.done, p.done, tid))
+            if p.done is not None:
+                cur.execute("UPDATE todo SET done = %s, done_at = CASE WHEN %s THEN now() END "
+                            "WHERE id = %s", (p.done, p.done, tid))
+            if p.report is not None:
+                cur.execute("UPDATE todo SET report = NULLIF(%s, '') WHERE id = %s",
+                            (p.report.strip()[:200], tid))
         conn.commit()
     finally:
         conn.close()
     return {"ok": True}
+
+
+_REPORTS_DIR = Path(__file__).resolve().parent.parent / "docs" / "analysis"
+
+
+@app.get("/reports/{name}", include_in_schema=False)
+def report_file(name: str):
+    """分析报告(docs/analysis/ 下的自包含 HTML)。仅允许纯文件名,防路径穿越。"""
+    if "/" in name or "\\" in name or name.startswith("."):
+        raise HTTPException(status_code=422, detail="非法文件名")
+    f = _REPORTS_DIR / name
+    if not f.is_file():
+        raise HTTPException(status_code=404, detail="报告不存在")
+    return FileResponse(f)
 
 
 @app.delete("/api/todos/{tid}")

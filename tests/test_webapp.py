@@ -289,6 +289,14 @@ def test_todo_crud():
     assert r.status_code == 200
     hit = next(i for i in client.get("/api/todos").json()["items"] if i["id"] == tid)
     assert hit["done"] is True and hit["done_at"]
+    # 关联报告
+    r = client.patch(f"/api/todos/{tid}", json={"report": "2026-07-11-minimax-unlock.html"})
+    assert r.status_code == 200
+    hit = next(i for i in client.get("/api/todos").json()["items"] if i["id"] == tid)
+    assert hit["report"] == "2026-07-11-minimax-unlock.html"
+    # 报告文件可访问;路径穿越拒绝
+    assert client.get("/reports/2026-07-11-minimax-unlock.html").status_code == 200
+    assert client.get("/reports/../project-notes.md").status_code in (404, 422)
     assert client.delete(f"/api/todos/{tid}").status_code == 200
     assert all(i["id"] != tid for i in client.get("/api/todos").json()["items"])
     # 空内容拒绝

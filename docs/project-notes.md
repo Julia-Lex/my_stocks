@@ -77,6 +77,18 @@
   3. 例行:回填失败代码重试、数据质检
 - 例外:2026-07-11 当天的三市场资金流首次回填(A股→港股→美股链式)由可视化会话挂起并跟踪收尾,属交接前遗留。
 
+## 4.2 待办-报告工作流(2026-07-12 起)
+
+用户在 webapp「待办事项」页记录分析需求(`todo` 表);分析会话完成一条后:
+
+1. 报告写成**自包含 HTML**(内联样式/脚本,无外部依赖),放 `docs/analysis/YYYY-MM-DD-<slug>.html`,合入 main;
+2. 挂接到待办并标完成(webapp 常驻 8500 端口):
+   `curl -X PATCH localhost:8500/api/todos/{id} -H 'Content-Type: application/json' -d '{"done": true, "report": "YYYY-MM-DD-<slug>.html"}'`
+   (待办 id 用 `GET /api/todos` 查;report 只填文件名,页面经 `/reports/{name}` 提供)
+3. 页面上该待办即显示「📄 查看分析报告」链接。
+
+注意:webapp 运行目录的 `docs/analysis/` 必须包含该文件——报告合入 main 后,提醒可视化会话把 main 合进 webapp 分支(两者同分支则无需)。
+
 ## 5. 待决事项(等用户拍板,勿擅自开工)
 
 - **港/美股历史估值缺口**(2026-07-11 记录):库里 `daily_valuation` 仅 A股;港美股行情页现用腾讯实时快照兜底(无 PS、美股无股息率、无历史走势)。若补:数据层建 hk/us 日度估值表并回填,候选源东财 datacenter(封禁范围外)。
