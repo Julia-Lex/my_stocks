@@ -1,0 +1,200 @@
+<meta charset="utf-8">
+<title>恒生科技指数候选盘点</title>
+<style>
+:root{
+  --page:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e; --muted:#898781;
+  --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.10);
+  --blue:#2a78d6; --aqua:#1baf7a; --violet:#4a3aa7; --red:#e34948; --orange:#eb6834; --yellow:#eda100;
+  --cmp:#c3c2b7; --good:#006300; --bad:#d03b3b;
+}
+@media (prefers-color-scheme: dark){:root{
+  --page:#0d0d0d; --surface:#1a1a19; --ink:#ffffff; --ink2:#c3c2b7; --muted:#898781;
+  --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10);
+  --blue:#3987e5; --aqua:#199e70; --violet:#9085e9; --red:#e66767; --orange:#d95926; --yellow:#c98500;
+  --cmp:#52514e; --good:#0ca30c; --bad:#e66767;
+}}
+:root[data-theme="light"]{
+  --page:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e; --muted:#898781;
+  --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.10);
+  --blue:#2a78d6; --aqua:#1baf7a; --violet:#4a3aa7; --red:#e34948; --orange:#eb6834; --yellow:#eda100;
+  --cmp:#c3c2b7; --good:#006300; --bad:#d03b3b;
+}
+:root[data-theme="dark"]{
+  --page:#0d0d0d; --surface:#1a1a19; --ink:#ffffff; --ink2:#c3c2b7; --muted:#898781;
+  --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10);
+  --blue:#3987e5; --aqua:#199e70; --violet:#9085e9; --red:#e66767; --orange:#d95926; --yellow:#c98500;
+  --cmp:#52514e; --good:#0ca30c; --bad:#e66767;
+}
+*{box-sizing:border-box}
+body{background:var(--page);color:var(--ink);margin:0;
+  font:15px/1.65 system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB",sans-serif;}
+.wrap{max-width:1020px;margin:0 auto;padding:40px 20px 64px}
+.eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:600}
+h1{font-size:30px;line-height:1.25;margin:6px 0 4px;text-wrap:balance;font-weight:700}
+h2{font-size:19px;margin:0 0 4px;font-weight:650}
+h3{font-size:15px;margin:0 0 6px}
+.sub{color:var(--ink2);margin:0 0 8px;max-width:72ch}
+.note{color:var(--muted);font-size:12.5px}
+section{margin-top:36px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 18px 14px;margin-top:12px;position:relative}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-top:20px}
+.tile{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px}
+.tile .k{font-size:12px;color:var(--muted);letter-spacing:.06em}
+.tile .v{font-size:24px;font-weight:700;margin-top:2px}
+.tile .d{font-size:12.5px;color:var(--ink2);margin-top:2px}
+.neg{color:var(--bad)} .pos{color:var(--good)}
+svg{display:block;width:100%;height:auto}
+svg text{font:11.5px system-ui,-apple-system,"PingFang SC",sans-serif;fill:var(--muted)}
+svg text.lbl{font-weight:600;font-size:12px}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12.5px;color:var(--ink2);margin:6px 2px 2px}
+.legend .sw{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:middle;margin-right:6px;transform:translateY(-1px)}
+.tip{position:absolute;pointer-events:none;background:var(--surface);border:1px solid var(--border);
+  border-radius:8px;padding:7px 10px;font-size:12px;line-height:1.5;box-shadow:0 2px 10px rgba(0,0,0,.12);
+  display:none;z-index:5;min-width:140px;color:var(--ink2)}
+.tip b{color:var(--ink)}
+table{border-collapse:collapse;width:100%;font-size:13px;font-variant-numeric:tabular-nums}
+th{color:var(--muted);font-weight:600;text-align:right;padding:6px 8px;border-bottom:1px solid var(--axis);white-space:nowrap}
+td{padding:6px 8px;text-align:right;border-bottom:1px solid var(--grid);white-space:nowrap}
+th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}
+tr.hl td{font-weight:650;background:color-mix(in srgb,var(--orange) 7%,transparent)}
+tr.dim td{color:var(--muted)}
+.tablewrap{overflow-x:auto;max-height:560px;overflow-y:auto}
+.tablewrap thead th{position:sticky;top:0;background:var(--surface)}
+.grade{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-top:12px}
+.grade .card{margin-top:0}
+.grade .tag{font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:700;padding:2px 8px;border-radius:99px;display:inline-block;margin-bottom:8px}
+ul{margin:8px 0;padding-left:20px;color:var(--ink2)}
+li{margin:4px 0}
+a{color:var(--blue)}
+.foot{margin-top:40px;padding-top:14px;border-top:1px solid var(--grid);color:var(--muted);font-size:12.5px}
+</style>
+<div class="wrap">
+<header>
+  <div class="eyebrow">恒生科技指数季检前瞻 · 数据截至 2026-07-10(市值为 07-11 实时快照)</div>
+  <h1>下一批进恒生科技指数的会是谁?</h1>
+  <p class="sub">9 月季检(数据截止 2026-06-30,预计 8 月下旬公布、9 月 7 日生效)的量化盘点:现役 30 只成分 + 27 只近一年上市科技新股,按恒生的排名口径(过去 12 个月日均总市值)折算排名。<b>结论:天数智芯大概率调入,壁仞科技在边缘;你点名的长飞光纤、兆易创新本轮基本无望</b>——兆易败在"A+H 公司恒生只按 H 股类别计市值"这个口径上。</p>
+</header>
+
+<div class="tiles">
+  <div class="tile"><div class="k">下次调整生效</div><div class="v">≈9月7日</div><div class="d">数据截止 6-30,结果 8 周内(≤8 月下旬)公布</div></div>
+  <div class="tile"><div class="k">大概率调入</div><div class="v">天数智芯</div><div class="d">日均市值 925 亿,合并池第 22 名(阈值:升至 24 名内)</div></div>
+  <div class="tile"><div class="k">边缘候选</div><div class="v">壁仞科技</div><div class="d">579 亿、第 31 名;更现实的窗口是 12 月检讨</div></div>
+  <div class="tile"><div class="k">调出风险最高</div><div class="v">同程旅行</div><div class="d">473 亿、成分内垫底;6 月刚调出的金蝶/金山即此量级</div></div>
+</div>
+
+<section>
+  <h2>一、规则速览:决定"谁能进"的五条硬约束</h2>
+  <div class="card"><ul style="margin:4px 0">
+    <li><b>节奏</b>:季度检讨,数据截止 3/6/9/12 月底,结果于截止后 8 周内公布,再约 2 周后生效。6 月 8 日那次(调入 MiniMax/智谱,调出金蝶/金山)即 3-31 截止 → 5-22 公布 → 6-08 生效;下一次 6-30 截止 → 预计 9-07(周一)生效。</li>
+    <li><b>排名口径</b>:过去 12 个月(不含停牌日)<b>日均总市值</b>的算术平均——不是最新市值。新股按上市以来实际交易日计算;近期急涨的股票(如壁仞)排名会被"拉低"。</li>
+    <li><b>缓冲区</b>:固定 30 只;候选排名升至<b>第 24 名以内</b>调入,现成分跌出<b>第 36 名以外</b>调出;中间地带由指数委员会裁量(有进必有出)。</li>
+    <li><b>A+H 关键口径</b>:市值按<b>在港上市的证券类别</b>计(H 股股本 × H 股价),不含 A 股部分——立讯精密 A+H 总市值数千亿,但 H 股类别仅 242 亿,这是兆易创新(H 股 247 亿)们的共同瓶颈。</li>
+    <li><b>快速纳入</b>:新股上市首日收盘总市值进入现役成分<b>前 10 名</b>(当前门槛≈2,600 亿)→ 第 10 个交易日后纳入。门槛极高,近一年无一触发(MiniMax/智谱也是走季检)。另外调入前提是先属于恒生综合指数(新股可与恒综同批纳入,智谱/天数智芯 6-08 即先例)。</li>
+  </ul></div>
+</section>
+
+<section>
+  <h2>二、缓冲区争夺战:第 16~38 名(调入/调出的战场)</h2>
+  <p class="sub">按 12 个月日均市值代理排名(现役成分 + 候选合并池)。<b>虚线 = 第 24 名(调入线)与第 36 名(调出线)</b>。天数智芯已越过多只现役成分;壁仞压在零跑/美的一线;同程旅行掉到调出区边缘。注意:合并池不含池外的其他恒综科技股(金蝶、金山、阅文等 300~500 亿量级),边缘位次实际竞争比图示更激烈。</p>
+  <div class="card"><div id="c-rank"></div><div class="legend" id="lg-rank"></div><div class="tip" id="tip-rank"></div></div>
+</section>
+
+<section>
+  <h2>三、完整排名表(30 现役 + 27 候选)</h2>
+  <div class="card tablewrap">
+    <table id="tbl"></table>
+  </div>
+  <div class="note" style="margin-top:8px">日均市值 = 当前市值 × (近 12 个月后复权均价 ÷ 最新后复权价),对拆合股稳健(禾赛 7-10 一拆八已处理);新股按上市以来交易日。"9月资格"=上市日不晚于 6-30 数据截止(晚于者最早 12 月检讨)。市值口径为该港股类别总市值(腾讯 qt 接口 f44)。</div>
+</section>
+
+<section>
+  <h2>四、分梯队结论</h2>
+  <div class="grade">
+    <div class="card"><span class="tag" style="background:color-mix(in srgb,var(--good) 14%,transparent);color:var(--good)">9月·大概率</span>
+      <h3>天数智芯(09903)</h3>
+      <p class="sub" style="font-size:13.5px">日均市值 925 亿、合并池第 22 名,高于 8 只现役成分,满足"升至 24 名内";AI 芯片属性与指数"AI 化"方向一致(6 月刚因此调入 MiniMax/智谱)。已是恒综成分+港股通标的,资格无障碍。对应调出席位:同程旅行(垫底)首当其冲。</p></div>
+    <div class="card"><span class="tag" style="background:color-mix(in srgb,var(--orange) 16%,transparent);color:var(--orange)">9月边缘 / 12月主攻</span>
+      <h3>壁仞科技(06082)</h3>
+      <p class="sub" style="font-size:13.5px">日均 579 亿、第 31 名,未到 24 名线;但已高于同程,且当前市值(609 亿)高于日均——若 Q3 股价守住,9-30 截止的 12 月检讨排名将继续上移。同梯队:Momenta(609 亿,7-08 上市,9 月无资格,12 月首次参检)。</p></div>
+    <div class="card"><span class="tag" style="background:color-mix(in srgb,var(--bad) 14%,transparent);color:var(--bad)">你点名的两只:本轮无望</span>
+      <h3>长飞光纤(06869)/ 兆易创新(03986)</h3>
+      <p class="sub" style="font-size:13.5px">长飞:2014 年上市的老 A+H,不走"新股"叙事;H 类别日均 453 亿、第 34 名,离 24 名线差约一倍市值。兆易:H 股 2026-01-13 上市,但 H 股类别市值仅 247 亿(第 43 名)——A 股市值再大也不计入,除非 H 股大幅扩容或股价翻倍,12 月也难。</p></div>
+    <div class="card"><span class="tag" style="background:color-mix(in srgb,var(--blue) 14%,transparent);color:var(--blue)">观察池(12月起)</span>
+      <h3>A+H 回港潮的共同瓶颈</h3>
+      <p class="sub" style="font-size:13.5px">立讯(242 亿)、澜起(221 亿)、胜宏(391 亿)、晶合/三环/圣邦/安克(<100 亿)——H 股类别市值普遍只有公司总市值的 5%~15%,距 24 名线(约 850 亿)都很远。这批股的指数故事在恒综/港股通(门槛低),不在恒科指。原生新股中禾赛(225 亿)、小马(332 亿)、文远(187 亿)同样不足。</p></div>
+  </div>
+</section>
+
+<section>
+  <h2>五、口径与局限</h2>
+  <ul>
+    <li>数据:成分名单为本地库 index_member(2026-07-11);市值为腾讯实时接口 07-11 快照(周六,即周五收盘口径);均价比例用本地港股日线×复权因子(hfq)。</li>
+    <li>规则来源:<a href="https://www.hsi.com.hk/static/uploads/contents/zh_cn/dl_centre/methodologies/index_methodology_guide_c.pdf">恒生指数系列编算总则(2026-05 v1.19)</a>、<a href="https://xueqiu.com/3338215700/382023619">LiveReport 6月检讨测算</a>、<a href="https://xueqiu.com/5702970339/376541027">恒科指纳入规则解析(雪球)</a>、<a href="https://finance.sina.com.cn/stock/hkstock/2026-05-27/doc-inhzhpmu2388427.shtml">"AI化"重估报道(新浪)</a>。</li>
+    <li>局限:① 合并池排名是<b>下限代理</b>——未含池外恒综科技股(金蝶/金山/阅文/ASMPT 等 300~500 亿量级),24/36 名边界附近的真实名次会更靠后 1~5 位;② 12 个月日均市值用"均价比例×当前市值"折算,忽略期内股本变动(增发/行使);③ 科技主题认定与委员会裁量无法量化;④ A+H 按 H 类别计市值是按编算总则及美的/联想先例的理解,若恒生对个别公司采用合并口径,结论需修正。</li>
+    <li>验证点:8 月下旬恒指公司公布检讨结果后对照本报告(尤其天数智芯/同程)。</li>
+  </ul>
+</section>
+<div class="foot">生成于 2026-07-12 · my_stocks 数据库 · docs/analysis/hstech_candidates_analysis.py 可复跑刷新</div>
+</div>
+
+<script>
+const DATA = {"rows": [{"rank": 1, "stock_code": "00700.HK", "name": "腾讯控股", "role": "成分", "typ": "", "mv_yi": 41843.8, "avg_mv_yi": 50688.9, "list_d": "2004-06-16", "n": 244, "eligible_sep": true}, {"rank": 2, "stock_code": "09988.HK", "name": "阿里巴巴－Ｗ", "role": "成分", "typ": "", "mv_yi": 21132.5, "avg_mv_yi": 26626.4, "list_d": "2019-11-26", "n": 244, "eligible_sep": true}, {"rank": 3, "stock_code": "01810.HK", "name": "小米集团－Ｗ", "role": "成分", "typ": "", "mv_yi": 5514.7, "avg_mv_yi": 8554.1, "list_d": "2018-07-09", "n": 244, "eligible_sep": true}, {"rank": 4, "stock_code": "09999.HK", "name": "网易", "role": "成分", "typ": "", "mv_yi": 6598.2, "avg_mv_yi": 6524.1, "list_d": "2020-06-11", "n": 244, "eligible_sep": true}, {"rank": 5, "stock_code": "03690.HK", "name": "美团－Ｗ", "role": "成分", "typ": "", "mv_yi": 4403.7, "avg_mv_yi": 5338.0, "list_d": "2018-09-20", "n": 244, "eligible_sep": true}, {"rank": 6, "stock_code": "00981.HK", "name": "中芯国际", "role": "成分", "typ": "", "mv_yi": 4790.2, "avg_mv_yi": 4091.5, "list_d": "2004-03-18", "n": 244, "eligible_sep": true}, {"rank": 7, "stock_code": "01211.HK", "name": "比亚迪股份", "role": "成分", "typ": "", "mv_yi": 3127.2, "avg_mv_yi": 3733.1, "list_d": "2002-07-31", "n": 244, "eligible_sep": true}, {"rank": 8, "stock_code": "09961.HK", "name": "携程集团－Ｓ", "role": "成分", "typ": "", "mv_yi": 2074.2, "avg_mv_yi": 3007.8, "list_d": "2021-04-19", "n": 244, "eligible_sep": true}, {"rank": 9, "stock_code": "09618.HK", "name": "京东集团－ＳＷ", "role": "成分", "typ": "", "mv_yi": 2655.7, "avg_mv_yi": 2842.4, "list_d": "2020-06-18", "n": 244, "eligible_sep": true}, {"rank": 10, "stock_code": "09888.HK", "name": "百度集团－ＳＷ", "role": "成分", "typ": "", "mv_yi": 2536.5, "avg_mv_yi": 2605.4, "list_d": "2021-03-23", "n": 244, "eligible_sep": true}, {"rank": 11, "stock_code": "01024.HK", "name": "快手－Ｗ", "role": "成分", "typ": "", "mv_yi": 1582.2, "avg_mv_yi": 2356.9, "list_d": "2021-02-05", "n": 244, "eligible_sep": true}, {"rank": 12, "stock_code": "02513.HK", "name": "智谱", "role": "成分", "typ": "", "mv_yi": 3629.6, "avg_mv_yi": 1985.4, "list_d": "2026-01-08", "n": 122, "eligible_sep": true}, {"rank": 13, "stock_code": "06618.HK", "name": "京东健康", "role": "成分", "typ": "", "mv_yi": 1197.7, "avg_mv_yi": 1753.4, "list_d": "2020-12-08", "n": 244, "eligible_sep": true}, {"rank": 14, "stock_code": "00100.HK", "name": "MINIMAX-W", "role": "成分", "typ": "", "mv_yi": 624.6, "avg_mv_yi": 1614.6, "list_d": "2026-01-09", "n": 121, "eligible_sep": true}, {"rank": 15, "stock_code": "00992.HK", "name": "联想集团", "role": "成分", "typ": "", "mv_yi": 3036.7, "avg_mv_yi": 1505.8, "list_d": "1994-02-14", "n": 244, "eligible_sep": true}, {"rank": 16, "stock_code": "02015.HK", "name": "理想汽车－Ｗ", "role": "成分", "typ": "", "mv_yi": 803.9, "avg_mv_yi": 1292.3, "list_d": "2021-08-12", "n": 244, "eligible_sep": true}, {"rank": 17, "stock_code": "01347.HK", "name": "华虹宏力", "role": "成分", "typ": "", "mv_yi": 2467.1, "avg_mv_yi": 1214.3, "list_d": "2014-10-15", "n": 244, "eligible_sep": true}, {"rank": 18, "stock_code": "09868.HK", "name": "小鹏集团－Ｗ", "role": "成分", "typ": "", "mv_yi": 802.5, "avg_mv_yi": 1158.1, "list_d": "2021-07-07", "n": 244, "eligible_sep": true}, {"rank": 19, "stock_code": "09866.HK", "name": "蔚来－ＳＷ", "role": "成分", "typ": "", "mv_yi": 911.3, "avg_mv_yi": 1047.2, "list_d": "2022-03-10", "n": 244, "eligible_sep": true}, {"rank": 20, "stock_code": "01698.HK", "name": "腾讯音乐－ＳＷ", "role": "成分", "typ": "", "mv_yi": 519.6, "avg_mv_yi": 969.4, "list_d": "2022-09-21", "n": 244, "eligible_sep": true}, {"rank": 21, "stock_code": "09660.HK", "name": "地平线机器人－Ｗ", "role": "成分", "typ": "", "mv_yi": 550.7, "avg_mv_yi": 960.9, "list_d": "2024-10-24", "n": 244, "eligible_sep": true}, {"rank": 22, "stock_code": "09903.HK", "name": "天数智芯", "role": "候选", "typ": "原生·AI芯片", "mv_yi": 1181.9, "avg_mv_yi": 924.5, "list_d": "2026-01-08", "n": 122, "eligible_sep": true}, {"rank": 23, "stock_code": "00020.HK", "name": "商汤－Ｗ", "role": "成分", "typ": "", "mv_yi": 588.1, "avg_mv_yi": 863.5, "list_d": "2021-12-30", "n": 244, "eligible_sep": true}, {"rank": 24, "stock_code": "00241.HK", "name": "阿里健康", "role": "成分", "typ": "", "mv_yi": 561.3, "avg_mv_yi": 849.3, "list_d": "1980-01-02", "n": 244, "eligible_sep": true}, {"rank": 25, "stock_code": "02382.HK", "name": "舜宇光学科技", "role": "成分", "typ": "", "mv_yi": 603.1, "avg_mv_yi": 749.1, "list_d": "2007-06-15", "n": 244, "eligible_sep": true}, {"rank": 26, "stock_code": "00285.HK", "name": "比亚迪电子", "role": "成分", "typ": "", "mv_yi": 490.3, "avg_mv_yi": 745.6, "list_d": "2007-12-20", "n": 244, "eligible_sep": true}, {"rank": 27, "stock_code": "06690.HK", "name": "海尔智家", "role": "成分", "typ": "", "mv_yi": 574.7, "avg_mv_yi": 693.1, "list_d": "2020-12-23", "n": 244, "eligible_sep": true}, {"rank": 28, "stock_code": "09626.HK", "name": "哔哩哔哩－Ｗ", "role": "成分", "typ": "", "mv_yi": 471.6, "avg_mv_yi": 659.5, "list_d": "2021-03-29", "n": 244, "eligible_sep": true}, {"rank": 29, "stock_code": "06880.HK", "name": "MOMENTA-W", "role": "候选", "typ": "原生·智驾", "mv_yi": 609.5, "avg_mv_yi": 609.5, "list_d": "2026-07-08", "n": 3, "eligible_sep": false}, {"rank": 30, "stock_code": "09863.HK", "name": "零跑汽车", "role": "成分", "typ": "", "mv_yi": 426.9, "avg_mv_yi": 580.7, "list_d": "2022-09-29", "n": 244, "eligible_sep": true}, {"rank": 31, "stock_code": "06082.HK", "name": "壁仞科技", "role": "候选", "typ": "原生·AI芯片", "mv_yi": 609.0, "avg_mv_yi": 579.2, "list_d": "2026-01-02", "n": 126, "eligible_sep": true}, {"rank": 32, "stock_code": "00300.HK", "name": "美的集团", "role": "成分", "typ": "", "mv_yi": 577.6, "avg_mv_yi": 556.6, "list_d": "2024-09-17", "n": 244, "eligible_sep": true}, {"rank": 33, "stock_code": "00780.HK", "name": "同程旅行", "role": "成分", "typ": "", "mv_yi": 294.5, "avg_mv_yi": 473.0, "list_d": "2018-11-26", "n": 244, "eligible_sep": true}, {"rank": 34, "stock_code": "06869.HK", "name": "长飞光纤光缆", "role": "候选", "typ": "老股·光纤(用户提问)", "mv_yi": 673.7, "avg_mv_yi": 453.4, "list_d": "2014-12-10", "n": 244, "eligible_sep": true}, {"rank": 35, "stock_code": "02476.HK", "name": "胜宏科技", "role": "候选", "typ": "A+H·PCB", "mv_yi": 253.7, "avg_mv_yi": 390.9, "list_d": "2026-04-21", "n": 55, "eligible_sep": true}, {"rank": 36, "stock_code": "02026.HK", "name": "小马智行－Ｗ", "role": "候选", "typ": "原生·Robotaxi", "mv_yi": 185.3, "avg_mv_yi": 332.2, "list_d": "2025-11-06", "n": 164, "eligible_sep": true}, {"rank": 37, "stock_code": "06651.HK", "name": "五一视界", "role": "候选", "typ": "原生·数字孪生", "mv_yi": 261.9, "avg_mv_yi": 276.5, "list_d": "2025-12-30", "n": 128, "eligible_sep": true}, {"rank": 38, "stock_code": "02475.HK", "name": "立讯精密", "role": "候选", "typ": "A+H·消费电子", "mv_yi": 241.6, "avg_mv_yi": 240.2, "list_d": "2026-07-09", "n": 2, "eligible_sep": false}, {"rank": 39, "stock_code": "02525.HK", "name": "HESAI-W", "role": "候选", "typ": "原生·激光雷达", "mv_yi": 167.6, "avg_mv_yi": 225.2, "list_d": "2025-09-16", "n": 198, "eligible_sep": true}, {"rank": 40, "stock_code": "06809.HK", "name": "澜起科技", "role": "候选", "typ": "A+H·半导体", "mv_yi": 265.5, "avg_mv_yi": 220.9, "list_d": "2026-02-09", "n": 100, "eligible_sep": true}, {"rank": 41, "stock_code": "09678.HK", "name": "云知声", "role": "候选", "typ": "原生·AI", "mv_yi": 30.5, "avg_mv_yi": 186.9, "list_d": "2025-06-30", "n": 244, "eligible_sep": true}, {"rank": 42, "stock_code": "00800.HK", "name": "文远知行－Ｗ", "role": "候选", "typ": "原生·Robotaxi", "mv_yi": 133.3, "avg_mv_yi": 186.6, "list_d": "2025-11-06", "n": 164, "eligible_sep": true}, {"rank": 43, "stock_code": "03986.HK", "name": "兆易创新", "role": "候选", "typ": "A+H·半导体", "mv_yi": 246.9, "avg_mv_yi": 173.8, "list_d": "2026-01-13", "n": 119, "eligible_sep": true}, {"rank": 44, "stock_code": "02432.HK", "name": "越疆", "role": "候选", "typ": "原生·机器人", "mv_yi": 98.1, "avg_mv_yi": 163.4, "list_d": "2024-12-23", "n": 244, "eligible_sep": true}, {"rank": 45, "stock_code": "02050.HK", "name": "三花智控", "role": "候选", "typ": "A+H·汽车零部件", "mv_yi": 133.9, "avg_mv_yi": 158.0, "list_d": "2025-06-23", "n": 244, "eligible_sep": true}, {"rank": 46, "stock_code": "06166.HK", "name": "剑桥科技", "role": "候选", "typ": "A+H·光模块", "mv_yi": 101.0, "avg_mv_yi": 91.2, "list_d": "2025-10-28", "n": 170, "eligible_sep": true}, {"rank": 47, "stock_code": "03200.HK", "name": "大族数控", "role": "候选", "typ": "A+H·数控设备", "mv_yi": 79.5, "avg_mv_yi": 82.2, "list_d": "2026-02-06", "n": 101, "eligible_sep": true}, {"rank": 48, "stock_code": "06951.HK", "name": "三环集团", "role": "候选", "typ": "A+H·电子元件", "mv_yi": 74.9, "avg_mv_yi": 74.9, "list_d": "2026-07-09", "n": 2, "eligible_sep": false}, {"rank": 49, "stock_code": "01688.HK", "name": "领益智造", "role": "候选", "typ": "A+H·消费电子", "mv_yi": 63.2, "avg_mv_yi": 74.6, "list_d": "2026-06-26", "n": 10, "eligible_sep": true}, {"rank": 50, "stock_code": "06613.HK", "name": "蓝思科技", "role": "候选", "typ": "A+H·消费电子", "mv_yi": 66.4, "avg_mv_yi": 74.5, "list_d": "2025-07-09", "n": 244, "eligible_sep": true}, {"rank": 51, "stock_code": "03296.HK", "name": "华勤技术", "role": "候选", "typ": "A+H·ODM", "mv_yi": 66.0, "avg_mv_yi": 70.5, "list_d": "2026-04-23", "n": 53, "eligible_sep": true}, {"rank": 52, "stock_code": "02249.HK", "name": "晶合集成", "role": "候选", "typ": "A+H·半导体", "mv_yi": 69.8, "avg_mv_yi": 69.8, "list_d": "2026-07-10", "n": 1, "eligible_sep": false}, {"rank": 53, "stock_code": "03661.HK", "name": "圣邦股份", "role": "候选", "typ": "A+H·半导体", "mv_yi": 55.4, "avg_mv_yi": 62.7, "list_d": "2026-06-26", "n": 10, "eligible_sep": true}, {"rank": 54, "stock_code": "09630.HK", "name": "芯碁微装", "role": "候选", "typ": "A+H·半导体设备", "mv_yi": 48.4, "avg_mv_yi": 57.0, "list_d": "2026-06-26", "n": 10, "eligible_sep": true}, {"rank": 55, "stock_code": "00668.HK", "name": "安克创新", "role": "候选", "typ": "A+H·消费电子", "mv_yi": 48.0, "avg_mv_yi": 48.6, "list_d": "2026-07-02", "n": 7, "eligible_sep": false}, {"rank": 56, "stock_code": "02631.HK", "name": "天岳先进", "role": "候选", "typ": "A+H·半导体", "mv_yi": 41.2, "avg_mv_yi": 35.4, "list_d": "2025-08-20", "n": 217, "eligible_sep": true}, {"rank": 57, "stock_code": "02715.HK", "name": "埃斯顿", "role": "候选", "typ": "A+H·机器人", "mv_yi": 20.7, "avg_mv_yi": 15.0, "list_d": "2026-03-09", "n": 83, "eligible_sep": true}], "cutoff": "2026-06-30"};
+const rows = DATA.rows;
+
+// 图: 缓冲区 16~38 名横向条形
+(function(){
+  const zone = rows.filter(r=>r.rank>=16 && r.rank<=38);
+  const W=960, rowH=24, m={t:8,r:80,b:26,l:150};
+  const H=m.t+zone.length*rowH+m.b;
+  const vmax=1400;
+  const X=v=>m.l+(Math.min(v,vmax))/vmax*(W-m.l-m.r);
+  const color=r=> r.stock_code==='06869.HK'||r.stock_code==='03986.HK' ? 'var(--yellow)'
+    : r.role==='候选' ? (r.eligible_sep?'var(--orange)':'var(--cmp)') : 'var(--blue)';
+  let s='<svg viewBox="0 0 '+W+' '+H+'">';
+  [0,350,700,1050,1400].forEach(t=>{s+='<line x1="'+X(t)+'" x2="'+X(t)+'" y1="'+m.t+'" y2="'+(H-m.b)+'" stroke="var(--grid)"/><text x="'+X(t)+'" y="'+(H-8)+'" text-anchor="middle">'+t+'亿</text>';});
+  zone.forEach((r,i)=>{
+    const y=m.t+i*rowH;
+    s+='<rect data-i="'+i+'" x="'+m.l+'" y="'+(y+4)+'" width="'+(X(r.avg_mv_yi)-m.l)+'" height="14" rx="4" fill="'+color(r)+'"/>';
+    s+='<text x="'+(m.l-8)+'" y="'+(y+15)+'" text-anchor="end" style="fill:var(--ink2);font-weight:'+(r.role==='候选'?'650':'400')+'">'+r.rank+'. '+r.name+'</text>';
+    s+='<text x="'+(X(r.avg_mv_yi)+6)+'" y="'+(y+15)+'">'+r.avg_mv_yi.toFixed(0)+'</text>';
+    if(r.rank===24||r.rank===36){
+      const yy=y+rowH-1;
+      s+='<line x1="'+m.l+'" x2="'+(W-m.r)+'" y1="'+yy+'" y2="'+yy+'" stroke="var(--red)" stroke-dasharray="5 4" stroke-width="1.5"/>';
+      s+='<text class="lbl" x="'+(W-m.r)+'" y="'+(yy-4)+'" text-anchor="end" style="fill:var(--red)">第 '+r.rank+' 名 · '+(r.rank===24?'调入线':'调出线')+'</text>';
+    }
+  });
+  s+='</svg>';
+  const el=document.getElementById('c-rank');
+  el.innerHTML=s;
+  legend(document.getElementById('lg-rank'),[
+    {c:'var(--blue)',n:'现役成分'},{c:'var(--orange)',n:'候选(9月有资格)'},
+    {c:'var(--cmp)',n:'候选(晚于6-30上市,12月起)'},{c:'var(--yellow)',n:'用户点名(长飞/兆易)'}]);
+  const tip=document.getElementById('tip-rank');
+  el.querySelectorAll('rect').forEach(rc=>{
+    rc.addEventListener('pointermove',e=>{
+      const r=zone[+rc.dataset.i];
+      tip.innerHTML='<b>'+r.name+'</b>('+r.stock_code+')<div>12个月日均 <b>'+r.avg_mv_yi.toFixed(0)+'亿</b> · 当前 '+r.mv_yi.toFixed(0)+'亿</div><div>'+(r.typ||'现役成分')+' · 上市 '+r.list_d+'</div>';
+      tip.style.display='block';
+      const cw=el.parentElement.getBoundingClientRect();
+      let lx=e.clientX-cw.left+14; if(lx+200>cw.width) lx-=220;
+      tip.style.left=lx+'px'; tip.style.top=(e.clientY-cw.top+12)+'px';
+    });
+    rc.addEventListener('pointerleave',()=>tip.style.display='none');
+  });
+})();
+
+function legend(el, items){ el.innerHTML=items.map(i=>'<span><span class="sw" style="background:'+i.c+'"></span>'+i.n+'</span>').join(''); }
+
+// 表格
+(function(){
+  const cols=['#','股票','代码','身份','类型','当前市值(亿)','12个月日均(亿)','上市日','9月资格'];
+  let s='<thead><tr>'+cols.map(c=>'<th>'+c+'</th>').join('')+'</tr></thead><tbody>';
+  rows.forEach(r=>{
+    const hl=['09903.HK','06082.HK','06869.HK','03986.HK'].includes(r.stock_code);
+    s+='<tr class="'+(hl?'hl':(r.role==='成分'?'dim':''))+'"><td>'+r.rank+'</td><td>'+r.name+'</td><td>'+r.stock_code+'</td>'+
+      '<td>'+r.role+'</td><td>'+(r.typ||'—')+'</td><td>'+r.mv_yi.toFixed(0)+'</td><td>'+r.avg_mv_yi.toFixed(0)+'</td>'+
+      '<td>'+r.list_d+'</td><td>'+(r.role==='候选'?(r.eligible_sep?'✓':'✗ 12月起'):'—')+'</td></tr>';
+  });
+  document.getElementById('tbl').innerHTML=s+'</tbody>';
+})();
+</script>
