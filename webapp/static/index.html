@@ -131,7 +131,8 @@
   .todo-item input[type=checkbox] { margin-top:3px; accent-color:var(--accent); cursor:pointer; }
   .todo-item .tc { flex:1; font-size:14px; line-height:1.5; word-break:break-word; }
   .todo-item .tt { color:var(--muted); font-size:11.5px; margin-top:2px; }
-  .todo-item.done .tc { color:var(--muted); text-decoration:line-through; }
+  /* 完成划线只作用于待办正文(.ct),不级联到嵌套的定时验证列表 */
+  .todo-item.done .ct { color:var(--muted); text-decoration:line-through; }
   .todo-item .del { color:var(--muted); cursor:pointer; visibility:hidden; padding:0 2px; }
   .todo-item:hover .del { visibility:visible; }
   .todo-item .rpt { font-size:12.5px; color:var(--accent); text-decoration:none;
@@ -819,7 +820,7 @@ function renderTodos(items){
   $('#todolist').innerHTML = items.length ? items.map(t=>`
     <div class="todo-item${t.done?' done':''}" data-id="${t.id}">
       <input type="checkbox" ${t.done?'checked':''}>
-      <div class="tc">${t.content.replace(/</g,'&lt;')}
+      <div class="tc"><span class="ct">${t.content.replace(/</g,'&lt;')}</span>
         <div class="tt">${t.done ? '完成于 '+t.done_at : '创建于 '+t.created_at}${
           t.report ? ' · <a class="rpt" href="/reports/'+encodeURIComponent(t.report)+'" target="_blank">📄 查看分析报告</a>' : ''}</div>
         <div class="sch-list"${t.schedules.length?'':' style="border-top:none;padding-top:0"'}>${t.schedules.map(schHtml).join('')}
