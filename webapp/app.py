@@ -689,6 +689,57 @@ def todos_del(tid: int):
 
 
 # ---------------------------------------------------------------------------
+# 每日公告(现有事件层:业绩预告/业绩快报/龙虎榜;全量交易所公告待数据层补源)
+# ---------------------------------------------------------------------------
+@app.get("/api/announcements")
+def announcements(date_: date = Query(..., alias="date")):
+    """某日的公告级事件。forecast 按股去重(优先归母净利润口径);
+    nearest = 三个来源中 ≤ 所查日的最近有数据日(空日跳转用)。"""
+    fnum = lambda v: float(v) if v is not None else None  # noqa: E731
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT ON (f.stock_code) f.stock_code, s.name, f.report_date, "
+                "f.forecast_type, f.change_pct, f.change_desc "
+                "FROM fin_forecast f JOIN stock_basic s USING (stock_code) "
+                "WHERE f.ann_date = %s "
+                "ORDER BY f.stock_code, (f.forecast_type <> '归属于上市公司股东的净利润')",
+                (date_,))
+            forecast = [{"code": r[0], "name": r[1], "report_date": r[2].isoformat(),
+                         "type": r[3], "change_pct": fnum(r[4]), "desc": r[5]}
+                        for r in cur.fetchall()]
+            forecast.sort(key=lambda x: -(x["change_pct"] if x["change_pct"] is not None
+                                          else float("-inf")))
+            cur.execute(
+                "SELECT e.stock_code, s.name, e.report_date, e.revenue, e.revenue_yoy, "
+                "e.net_profit, e.net_profit_yoy "
+                "FROM fin_express e JOIN stock_basic s USING (stock_code) "
+                "WHERE e.ann_date = %s ORDER BY e.net_profit_yoy DESC NULLS LAST", (date_,))
+            express = [{"code": r[0], "name": r[1], "report_date": r[2].isoformat(),
+                        "revenue": fnum(r[3]), "revenue_yoy": fnum(r[4]),
+                        "net_profit": fnum(r[5]), "net_profit_yoy": fnum(r[6])}
+                       for r in cur.fetchall()]
+            cur.execute(
+                "SELECT l.stock_code, s.name, l.reason, l.close, l.pct_chg, l.net_buy "
+                "FROM lhb_detail l JOIN stock_basic s USING (stock_code) "
+                "WHERE l.trade_date = %s ORDER BY l.net_buy DESC NULLS LAST", (date_,))
+            lhb = [{"code": r[0], "name": r[1], "reason": r[2], "close": fnum(r[3]),
+                    "pct_chg": fnum(r[4]), "net_buy": fnum(r[5])} for r in cur.fetchall()]
+            cur.execute(
+                "SELECT max(d) FROM ("
+                "  SELECT max(ann_date) d FROM fin_forecast WHERE ann_date <= %s"
+                "  UNION ALL SELECT max(ann_date) FROM fin_express WHERE ann_date <= %s"
+                "  UNION ALL SELECT max(trade_date) FROM lhb_detail WHERE trade_date <= %s) t",
+                (date_, date_, date_))
+            nr = cur.fetchone()[0]
+    finally:
+        conn.close()
+    return {"date": date_.isoformat(), "nearest": nr.isoformat() if nr else None,
+            "forecast": forecast, "express": express, "lhb": lhb}
+
+
+# ---------------------------------------------------------------------------
 # 市场指数
 # ---------------------------------------------------------------------------
 _INDEX_TABLES = {

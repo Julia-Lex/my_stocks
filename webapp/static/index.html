@@ -117,6 +117,14 @@
   .wl-glist.drop-in { background:#f0f4ff; border-radius:8px; }
   .wl-addgrp { color:var(--accent); font-size:12.5px; cursor:pointer; padding:8px 6px 2px; }
   .ixchart { width:100%; height:340px; display:block; cursor:crosshair; }
+  /* 每日公告 */
+  .annnav { border:1px solid var(--border); background:#fff; border-radius:8px;
+            padding:5px 12px; cursor:pointer; font-size:13px; }
+  #anndate { border:1px solid var(--border); border-radius:8px; padding:5px 10px;
+             font-size:14px; }
+  #annbody td.desc { white-space:normal; min-width:340px; max-width:560px;
+                     text-align:left; color:#555; font-size:12.5px; }
+  #annbody td.nm2 { text-align:left; cursor:pointer; color:var(--accent); }
   /* 待办事项 */
   #todos { display:none; max-width:720px; }
   .todo-add { display:flex; gap:8px; margin-bottom:14px; }
@@ -196,6 +204,7 @@
     <span class="snav on" data-m="stock">个股信息</span>
     <span class="snav" data-m="boards">板块信息</span>
     <span class="snav" data-m="indices">市场指数</span>
+    <span class="snav" data-m="anns">每日公告</span>
     <span class="snav" data-m="todos">待办事项</span>
   </nav>
 </aside>
@@ -213,6 +222,15 @@
       </div>
       <div id="content"></div>
     </div>
+  </div>
+  <div id="anns" style="display:none">
+    <div class="freq">
+      <button class="annnav" id="annprev">◀</button>
+      <input type="date" id="anndate">
+      <button class="annnav" id="annnext">▶</button>
+      <span class="hint">A股公告级事件(业绩预告/快报按公告日,龙虎榜按交易日) · 点名称跳个股</span>
+    </div>
+    <div id="annbody"></div>
   </div>
   <div id="todos">
     <div class="sec">分析待办 <span class="note-inline">记录后续要做的分析,回车或点添加</span></div>
@@ -784,11 +802,75 @@ document.querySelectorAll('#mainnav .snav').forEach(t=>t.onclick=()=>{
   $('#stockpane').style.display = mode==='stock' ? 'flex' : 'none';
   $('#boards').style.display = mode==='boards' ? 'block' : 'none';
   $('#indices').style.display = mode==='indices' ? 'block' : 'none';
+  $('#anns').style.display = mode==='anns' ? 'block' : 'none';
   $('#todos').style.display = mode==='todos' ? 'block' : 'none';
   if(mode==='boards' && !snap[sk()]) loadBoards();
   if(mode==='indices') loadIndices();
+  if(mode==='anns') loadAnns();
   if(mode==='todos') loadTodos();
 });
+
+/* ================== 每日公告 ================== */
+function annShiftDay(n){
+  const d = new Date($('#anndate').value + 'T12:00');
+  d.setDate(d.getDate() + n);
+  $('#anndate').value = d.toLocaleDateString('sv');
+  loadAnns();
+}
+$('#annprev').onclick = ()=>annShiftDay(-1);
+$('#annnext').onclick = ()=>annShiftDay(1);
+$('#anndate').addEventListener('change', ()=>loadAnns());
+
+async function loadAnns(){
+  if(!$('#anndate').value) $('#anndate').value = new Date().toLocaleDateString('sv');
+  try{
+    const r = await fetch(`/api/announcements?date=${$('#anndate').value}`);
+    if(!r.ok) throw new Error('公告加载失败 HTTP '+r.status);
+    renderAnns(await r.json());
+  }catch(ex){ err(ex.message); }
+}
+const annJump = (code, name)=>{
+  document.querySelector('#mainnav .snav[data-m=stock]').click();
+  $('#q').value = `${name} ${code}`;
+  pick({market:'cn', code, name});
+};
+const pctCell = p => p==null ? '<td>—</td>' :
+  `<td style="color:${p>=0?'var(--up)':'var(--down)'}">${(p>=0?'+':'')+p.toFixed(2)}%</td>`;
+function renderAnns(d){
+  const empty = !d.forecast.length && !d.express.length && !d.lhb.length;
+  if(empty){
+    $('#annbody').innerHTML = `<div class="note">${d.date} 无公告记录` +
+      (d.nearest ? ` · <span class="backlink" id="annjump">跳到最近有公告的 ${d.nearest}</span>` : '') + '</div>';
+    const j = $('#annjump');
+    if(j) j.onclick = ()=>{ $('#anndate').value = d.nearest; loadAnns(); };
+    return;
+  }
+  const nmTd = i => `<td class="nm2" data-c="${i.code}" data-n="${i.name}">${i.name}<br><small style="color:var(--muted)">${i.code}</small></td>`;
+  let html = '';
+  if(d.forecast.length){
+    html += `<div class="sec">业绩预告 <span class="note-inline">${d.forecast.length} 家 · 按归母净利润预告变动幅降序</span></div>
+    <div class="panel"><table><thead><tr><th>名称</th><th>报告期</th><th>变动幅</th><th class="desc">预告摘要</th></tr></thead><tbody>`+
+    d.forecast.map(i=>`<tr>${nmTd(i)}<td>${i.report_date}</td>${pctCell(i.change_pct)}<td class="desc">${(i.desc||'—').replace(/</g,'&lt;')}</td></tr>`).join('')+
+    '</tbody></table></div>';
+  }
+  if(d.express.length){
+    html += `<div class="sec">业绩快报 <span class="note-inline">${d.express.length} 家</span></div>
+    <div class="panel"><table><thead><tr><th>名称</th><th>报告期</th><th>营收</th><th>营收同比</th><th>归母净利</th><th>净利同比</th></tr></thead><tbody>`+
+    d.express.map(i=>`<tr>${nmTd(i)}<td>${i.report_date}</td>`+
+      `<td>${i.revenue==null?'—':(i.revenue/1e8).toFixed(1)+' 亿'}</td>${pctCell(i.revenue_yoy)}`+
+      `<td>${i.net_profit==null?'—':(i.net_profit/1e8).toFixed(2)+' 亿'}</td>${pctCell(i.net_profit_yoy)}</tr>`).join('')+
+    '</tbody></table></div>';
+  }
+  if(d.lhb.length){
+    html += `<div class="sec">龙虎榜 <span class="note-inline">${d.lhb.length} 条 · 按净买入降序</span></div>
+    <div class="panel"><table><thead><tr><th>名称</th><th>涨跌幅</th><th>净买入</th><th class="desc">上榜原因</th></tr></thead><tbody>`+
+    d.lhb.map(i=>`<tr>${nmTd(i)}${pctCell(i.pct_chg)}`+
+      `<td>${i.net_buy==null?'—':(i.net_buy/1e8).toFixed(2)+' 亿'}</td><td class="desc">${i.reason}</td></tr>`).join('')+
+    '</tbody></table></div>';
+  }
+  $('#annbody').innerHTML = html;
+  document.querySelectorAll('#annbody .nm2').forEach(td=>td.onclick=()=>annJump(td.dataset.c, td.dataset.n));
+}
 
 /* ================== 待办事项 ================== */
 async function loadTodos(){

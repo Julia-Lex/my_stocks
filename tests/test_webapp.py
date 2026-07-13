@@ -348,6 +348,29 @@ def test_todo_schedules():
     client.delete(f"/api/todos/{tid2}")
 
 
+def test_announcements():
+    """每日公告:业绩预告(按股去重)/业绩快报/龙虎榜,空日给最近有数据日。"""
+    r = client.get("/api/announcements", params={"date": "2026-07-14"})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["date"] == "2026-07-14"
+    codes = [i["code"] for i in d["forecast"]]
+    assert len(codes) > 50 and len(codes) == len(set(codes))   # 一股一行
+    it = d["forecast"][0]
+    assert it["name"] and it["report_date"] and it["desc"]
+    r2 = client.get("/api/announcements", params={"date": "2026-07-13"})
+    lhb = r2.json()["lhb"]
+    assert len(lhb) > 50
+    assert lhb[0]["reason"] and lhb[0]["net_buy"] is not None
+    # 未来空日:nearest 给出最近有数据的日期
+    r3 = client.get("/api/announcements", params={"date": "2030-01-01"})
+    d3 = r3.json()
+    assert not d3["forecast"] and not d3["lhb"]
+    assert d3["nearest"] and d3["nearest"] >= "2026-07-13"
+    assert client.get("/api/announcements",
+                      params={"date": "bad"}).status_code == 422
+
+
 def test_index_kline():
     """市场指数日线 + 全市场总成交量(该市场全部个股当日 volume 之和)。"""
     r = client.get("/api/index/kline",
