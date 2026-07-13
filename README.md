@@ -92,6 +92,8 @@ A股受收盘防护约束(15:30 后才放行当日 bar,创业板/科创板 15:05
 5 18 * * 1-5  cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu ASTOCK_INTL_SOURCE=tx .venv/bin/python 06_daily_update_intl.py --market hk >> update_hk.log 2>&1
 # 事件数据:18:30(龙虎榜近5日+披露季预告/快报;⚠️ 交易所约 18:00 后才发布龙虎榜,再早取不到,近5日回看自愈)
 30 18 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 15_events_update.py >> update_events.log 2>&1
+# 事件深夜二次抓取:23:00(A股晚间披露高峰到22点+,18:30单轮抓不全;龙虎榜每跑必重拉近5日,自动补当晚新公告;datacenter源,非富途/非被封)
+0 23 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 15_events_update.py >> update_events.log 2>&1
 # 富途四连链:18:50 港基本面→美基本面→指数成分diff→港美板块diff ⚠️ 依赖 FutuOpenD 常驻〔港美会话维护〕
 50 18 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 13_fundamental_update_intl.py --market hk >> update_fund_hk.log 2>&1 && ASTOCK_DB_USER=zhu .venv/bin/python 13_fundamental_update_intl.py --market us >> update_fund_us.log 2>&1 && ASTOCK_DB_USER=zhu .venv/bin/python 17_index_member_intl.py >> update_idxmember.log 2>&1 && ASTOCK_DB_USER=zhu .venv/bin/python 19_board_intl.py >> update_board_intl.log 2>&1
 # 周全量备份:周日 03:00(本地3份轮换 + rsync NAS,脚本带未挂载守卫)
