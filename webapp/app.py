@@ -733,9 +733,17 @@ def announcements(date_: date = Query(..., alias="date")):
                 "  UNION ALL SELECT max(trade_date) FROM lhb_detail WHERE trade_date <= %s) t",
                 (date_, date_, date_))
             nr = cur.fetchone()[0]
+            # 抓取时间戳:该批事件最后一次入库时刻(此后披露的公告要等下轮抓取)
+            cur.execute(
+                "SELECT max(u) FROM ("
+                "  SELECT max(updated_at) u FROM fin_forecast WHERE ann_date = %s"
+                "  UNION ALL SELECT max(updated_at) FROM fin_express WHERE ann_date = %s) t",
+                (date_, date_))
+            fu = cur.fetchone()[0]
     finally:
         conn.close()
     return {"date": date_.isoformat(), "nearest": nr.isoformat() if nr else None,
+            "fetched_at": fu.isoformat()[:16].replace("T", " ") if fu else None,
             "forecast": forecast, "express": express, "lhb": lhb}
 
 

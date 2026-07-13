@@ -872,6 +872,10 @@ function renderAnns(d){
   }
   const nmTd = i => `<td class="nm2" data-c="${i.code}" data-n="${i.name}">${i.name}<br><small style="color:var(--muted)">${i.code}</small></td>`;
   let html = '';
+  if(d.fetched_at){
+    html += `<div class="note" style="text-align:left;padding:0 0 8px;font-size:12px">
+      本页数据抓取于 ${d.fetched_at};此后披露的公告要等下一轮抓取(每晚一次)才会出现。</div>`;
+  }
   if(d.forecast.length){
     html += `<div class="sec">业绩预告 <span class="note-inline">${d.forecast.length} 家 · 按归母净利润预告变动幅降序</span></div>
     <div class="panel"><table><thead><tr><th>名称</th><th>报告期</th><th>变动幅</th><th class="desc">预告摘要</th></tr></thead><tbody>`+
