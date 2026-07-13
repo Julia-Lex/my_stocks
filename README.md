@@ -79,7 +79,7 @@ A股受收盘防护约束(15:30 后才放行当日 bar,创业板/科创板 15:05
 ```cron
 # 美股日线(腾讯):周二~六 09:00,拉前一交易日;指数行(新浪)周六常晚半天,自愈
 0 9 * * 2-6   cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu ASTOCK_INTL_SOURCE=tx .venv/bin/python 06_daily_update_intl.py --market us >> update_us.log 2>&1
-# A股日线弹性链:工作日 16:00(收盘防护 15:30 放行+数据商缓冲;东财主源,封禁时自动切腾讯+快照补,见 25 脚本)
+# A股日线弹性链:工作日 16:00(探测优先——东财行情族可用走主源,被封直接走腾讯+24快照,不硬撞被封端点;见 25 脚本)
 0 16 * * 1-5  /Users/zhu/own/my_stocks/25_daily_ashare_chain.sh >> /Users/zhu/own/my_stocks/update.log 2>&1
 # A股分钟线(通达信):16:20 ⚠️ 历史仅约3个月,长期断档不可补
 20 16 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 07_minute_update.py >> update_minute.log 2>&1
