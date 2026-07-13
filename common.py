@@ -193,6 +193,26 @@ def _fetch_daily_em(symbol: str, start: str = "19900101", end: Optional[str] = N
     return df
 
 
+def fetch_amount_sina(symbol: str, start: str = "19900101", end: Optional[str] = None) -> pd.DataFrame:
+    """单只 A 股成交额(新浪源)。返回列: trade_date, amount(元)。
+
+    专供 amount 缺口回填(26 脚本):腾讯备源 K 线不带成交额,东财 push2his 常被封;
+    新浪 stock_zh_a_daily 直接给成交额,口径与东财到元一致(2026-07-13 实测),
+    老历史(2016+)与北交所(920 段)均覆盖,且不在东财封禁范围。start/end 'YYYYMMDD'。
+    """
+    import akshare as ak
+
+    end = end or datetime.now().strftime("%Y%m%d")
+    df = with_retry(ak.stock_zh_a_daily, symbol=to_sina_code(symbol),
+                    start_date=start, end_date=end, adjust="")
+    if df is None or df.empty or "amount" not in df.columns:
+        return pd.DataFrame()
+    out = df[["date", "amount"]].rename(columns={"date": "trade_date"}).copy()
+    out["trade_date"] = pd.to_datetime(out["trade_date"], errors="coerce").dt.date
+    out["amount"] = pd.to_numeric(out["amount"], errors="coerce")
+    return out.dropna(subset=["trade_date"])
+
+
 def fetch_hfq_factor(symbol: str) -> pd.DataFrame:
     """
     单只股票的后复权因子。返回列: trade_date, adj_factor。
