@@ -2260,22 +2260,24 @@ def fetch_announcements(begin: str, end: str, page_size: int = 100,
         dt = (it.get("display_time") or "")[:19]   # 'YYYY-MM-DD HH:MM:SS'(丢毫秒)
         if not art or len(dt) < 19:
             continue
-        cols = it.get("columns") or []
-        cat = cols[0].get("column_name") if cols else None
+        cols = [c.get("column_name") for c in (it.get("columns") or []) if c.get("column_name")]
+        cat = cols[0] if cols else None            # 主类型(展示用)
+        cats = list(dict.fromkeys(cols)) or None   # 全标签去重保序(按类型筛用)
         url = f"https://data.eastmoney.com/notices/detail/{sym}/{art}.html"
-        rows.append((art, to_full_code(sym), it.get("title"), cat, dt, url))
+        rows.append((art, to_full_code(sym), it.get("title"), cat, cats, dt, url))
     if not rows:
         return pd.DataFrame()
     return pd.DataFrame(rows, columns=["art_code", "stock_code", "title",
-                                       "category", "publish_time", "url"])
+                                       "category", "categories", "publish_time", "url"])
 
 
 def upsert_announcements(conn, df: pd.DataFrame) -> int:
     """公告 upsert(art_code 去重;标题/类型如被修订则更新)。"""
     if df.empty:
         return 0
-    rows = [(r.art_code, r.stock_code, r.title, r.category, r.publish_time, r.url)
+    rows = [(r.art_code, r.stock_code, r.title, r.category, r.categories, r.publish_time, r.url)
             for r in df.itertuples(index=False)]
     return upsert(conn, "announcement",
-                  ["art_code", "stock_code", "title", "category", "publish_time", "url"],
-                  rows, ["art_code"], update_cols=["title", "category", "publish_time", "url"])
+                  ["art_code", "stock_code", "title", "category", "categories", "publish_time", "url"],
+                  rows, ["art_code"],
+                  update_cols=["title", "category", "categories", "publish_time", "url"])
