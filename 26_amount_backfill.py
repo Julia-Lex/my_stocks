@@ -1,11 +1,12 @@
 """
-26_amount_backfill.py — 回填 daily_price.amount 缺口(东财源,断点续传)。
+26_amount_backfill.py — 回填 daily_price.amount 缺口(新浪源,断点续传)。
 
 背景:走过腾讯兜底(ASTOCK_ASHARE_SOURCE=tx)的行 amount 为空(腾讯 K 线不带成交额)。
-本脚本按"有缺口的股票"逐只重取东财不复权 K 线,只 UPDATE amount 列(不碰 volume/价格,
-避免与既有收盘防护/复权口径冲突)。仅回填,不新增行。
+本脚本按"有缺口的股票"逐只取新浪成交额,只 UPDATE amount IS NULL 的行(不碰
+volume/价格)。仅回填,不新增行。
 
-⚠️ 东财行情族(push2his)封禁期间会撞墙——由 25/守候链在解封后触发,或手动确认解封后运行。
+选用新浪而非东财:新浪 stock_zh_a_daily 直接给成交额,口径与东财到元一致
+(2026-07-13 实测),覆盖老历史与北交所,且不受东财行情族封禁影响——可随时运行。
 
 用法:
   ASTOCK_DB_USER=zhu .venv/bin/python 26_amount_backfill.py            # 全量缺口(断点续传)
@@ -18,10 +19,12 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 
 import common as c
 
 TASK = "amount_backfill"
+_SINA_INTERVAL = 0.35   # 新浪 WAF 保守节流
 
 
 def main() -> int:
@@ -51,7 +54,7 @@ def main() -> int:
         if args.limit:
             todo = todo[: args.limit]
         total_missing = sum(g[3] for g in todo)
-        c.log.info("amount 回填:%d 只待处理(缺口 %d 行;已完成 %d 只)",
+        c.log.info("amount 回填(新浪源):%d 只待处理(缺口 %d 行;已完成 %d 只)",
                    len(todo), total_missing, len(done))
 
         n_ok = n_upd = n_err = 0
@@ -59,16 +62,15 @@ def main() -> int:
         for i, (code, gmin, gmax, cnt) in enumerate(todo, 1):
             symbol = code.split(".")[0]
             try:
-                df = c._fetch_daily_em(symbol, start=gmin.strftime("%Y%m%d"),
-                                       end=gmax.strftime("%Y%m%d"))
+                time.sleep(_SINA_INTERVAL)
+                df = c.fetch_amount_sina(symbol, start=gmin.strftime("%Y%m%d"),
+                                         end=gmax.strftime("%Y%m%d"))
                 consecutive_errors = 0
-                if df.empty or "amount" not in df.columns:
+                if df.empty:
                     c.mark_progress(conn, TASK, code, gmax, "done", "src_empty")
                     continue
-                rows = [(r.trade_date, c._num(r, "amount")) for r in df.itertuples(index=False)
-                        if c._num(r, "amount") is not None]
+                rows = [(r.trade_date, float(r.amount)) for r in df.itertuples(index=False)]
                 with conn.cursor() as cur:
-                    # 只补空行,不覆盖已有 amount(东财口径与库内既有 amount 一致,但稳妥起见只填 NULL)
                     cur.executemany(
                         "UPDATE daily_price SET amount = %s "
                         "WHERE stock_code = %s AND trade_date = %s AND amount IS NULL",
@@ -86,8 +88,8 @@ def main() -> int:
                 consecutive_errors += 1
                 c.mark_progress(conn, TASK, code, None, "error", str(exc)[:200])
                 c.log.error("  %s 失败: %s", code, str(exc)[:120])
-                if consecutive_errors >= 15:
-                    c.log.critical("连续 %d 只失败,疑似东财封禁,提前终止(已补 %d 行,断点续传补齐)",
+                if consecutive_errors >= 20:
+                    c.log.critical("连续 %d 只失败,疑似新浪限流,提前终止(已补 %d 行,断点续传补齐)",
                                    consecutive_errors, n_upd)
                     break
         c.log.info("完成:成功 %d / 失败 %d,共补 amount %d 行", n_ok, n_err, n_upd)
