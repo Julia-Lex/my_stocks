@@ -9,6 +9,7 @@
 set -u
 cd /Users/zhu/own/my_stocks || exit 1
 export ASTOCK_DB_USER=zhu
+export PATH="/opt/homebrew/bin:$PATH"   # cron 的 PATH 精简,psql 需显式加入
 
 # --- 东财行情族单次探测(1 请求,不是全量硬跑) ---
 em_ok=$(.venv/bin/python - <<'PY'

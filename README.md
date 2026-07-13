@@ -85,9 +85,9 @@ A股受收盘防护约束(15:30 后才放行当日 bar,创业板/科创板 15:05
 20 16 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 07_minute_update.py >> update_minute.log 2>&1
 # A股基本面:16:40(估值日更+披露季核查)
 40 16 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 10_fundamental_update.py >> update_fund.log 2>&1
-# A股资金流+板块二连链(富途源):17:00,富途 EOD 已终值;早于港美板块链 18:50-19:20,不撞窗口。
+# A股资金流+板块二连链(富途源):19:30,排在港美板块链 18:50-19:20 窗口之后(本链 ~2.4h:资金流全市场重拉~100min+板块~55min,塞不进 18:50 前)。
 # 链序:先 23 个股资金流(当日数据落库)再 21 板块(其末尾 REFRESH board_capital_flow 聚合视图才能含当日)
-0 17 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 23_capital_flow_update.py --update >> update_capflow.log 2>&1 && ASTOCK_BOARD_SOURCE=futu ASTOCK_DB_USER=zhu .venv/bin/python 21_board_update.py >> update_board.log 2>&1
+30 19 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 23_capital_flow_update.py --update >> update_capflow.log 2>&1 && ASTOCK_BOARD_SOURCE=futu ASTOCK_DB_USER=zhu .venv/bin/python 21_board_update.py >> update_board.log 2>&1
 # 港股日线(腾讯):18:05,当晚到位(日历腾讯代理探测)〔港美会话维护〕
 5 18 * * 1-5  cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu ASTOCK_INTL_SOURCE=tx .venv/bin/python 06_daily_update_intl.py --market hk >> update_hk.log 2>&1
 # 事件数据:18:30(龙虎榜近5日+披露季预告/快报;⚠️ 交易所约 18:00 后才发布龙虎榜,再早取不到,近5日回看自愈)
