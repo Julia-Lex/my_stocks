@@ -691,14 +691,49 @@ def todos_del(tid: int):
 # ---------------------------------------------------------------------------
 # 每日公告(现有事件层:业绩预告/业绩快报/龙虎榜;全量交易所公告待数据层补源)
 # ---------------------------------------------------------------------------
+_ANN_STREAM_LIMIT = 300
+
+
 @app.get("/api/announcements")
-def announcements(date_: date = Query(..., alias="date")):
-    """某日的公告级事件。forecast 按股去重(优先归母净利润口径);
-    nearest = 三个来源中 ≤ 所查日的最近有数据日(空日跳转用)。"""
+def announcements(date_: date = Query(..., alias="date"),
+                  q: str | None = Query(None, max_length=64),
+                  category: str | None = Query(None, max_length=64)):
+    """某日的公告。stream=全类型公告流(announcement 表,按发布时刻降序,
+    最多 300 条,q/类型服务端过滤);forecast/express/lhb 为事件层摘要;
+    nearest = 各来源中 ≤ 所查日的最近有数据日(空日跳转用)。"""
     fnum = lambda v: float(v) if v is not None else None  # noqa: E731
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            # --- 公告流 ---
+            cond = "a.publish_time >= %s AND a.publish_time < %s::date + 1"
+            params: list = [date_, date_]
+            if category:
+                cond += " AND a.category = %s"
+                params.append(category)
+            if q and q.strip():
+                cond += (" AND (a.title ILIKE %s OR a.stock_code ILIKE %s "
+                         "OR s.name ILIKE %s)")
+                params += [f"%{q.strip()}%"] * 3
+            cur.execute(
+                f"SELECT count(*) FROM announcement a "
+                f"LEFT JOIN stock_basic s ON s.stock_code = a.stock_code WHERE {cond}",
+                params)
+            total = cur.fetchone()[0]
+            cur.execute(
+                f"SELECT a.publish_time, a.stock_code, s.name, a.category, a.title, a.url "
+                f"FROM announcement a "
+                f"LEFT JOIN stock_basic s ON s.stock_code = a.stock_code "
+                f"WHERE {cond} ORDER BY a.publish_time DESC LIMIT {_ANN_STREAM_LIMIT}",
+                params)
+            stream_items = [{"time": r[0].isoformat()[11:19], "code": r[1],
+                             "name": r[2] or r[1], "category": r[3] or "其他",
+                             "title": r[4], "url": r[5]} for r in cur.fetchall()]
+            cur.execute(
+                "SELECT COALESCE(category, '其他'), count(*) FROM announcement "
+                "WHERE publish_time >= %s AND publish_time < %s::date + 1 "
+                "GROUP BY 1 ORDER BY 2 DESC", (date_, date_))
+            categories = [{"name": r[0], "count": r[1]} for r in cur.fetchall()]
             cur.execute(
                 "SELECT DISTINCT ON (f.stock_code) f.stock_code, s.name, f.report_date, "
                 "f.forecast_type, f.change_pct, f.change_desc "
@@ -728,22 +763,26 @@ def announcements(date_: date = Query(..., alias="date")):
                     "pct_chg": fnum(r[4]), "net_buy": fnum(r[5])} for r in cur.fetchall()]
             cur.execute(
                 "SELECT max(d) FROM ("
-                "  SELECT max(ann_date) d FROM fin_forecast WHERE ann_date <= %s"
+                "  SELECT max(publish_time)::date d FROM announcement WHERE publish_time < %s::date + 1"
+                "  UNION ALL SELECT max(ann_date) FROM fin_forecast WHERE ann_date <= %s"
                 "  UNION ALL SELECT max(ann_date) FROM fin_express WHERE ann_date <= %s"
                 "  UNION ALL SELECT max(trade_date) FROM lhb_detail WHERE trade_date <= %s) t",
-                (date_, date_, date_))
+                (date_, date_, date_, date_))
             nr = cur.fetchone()[0]
-            # 抓取时间戳:该批事件最后一次入库时刻(此后披露的公告要等下轮抓取)
+            # 抓取时间戳:该批数据最后一次入库时刻(此后披露的公告要等下轮抓取)
             cur.execute(
                 "SELECT max(u) FROM ("
-                "  SELECT max(updated_at) u FROM fin_forecast WHERE ann_date = %s"
+                "  SELECT max(updated_at) u FROM announcement "
+                "    WHERE publish_time >= %s AND publish_time < %s::date + 1"
+                "  UNION ALL SELECT max(updated_at) FROM fin_forecast WHERE ann_date = %s"
                 "  UNION ALL SELECT max(updated_at) FROM fin_express WHERE ann_date = %s) t",
-                (date_, date_))
+                (date_, date_, date_, date_))
             fu = cur.fetchone()[0]
     finally:
         conn.close()
     return {"date": date_.isoformat(), "nearest": nr.isoformat() if nr else None,
             "fetched_at": fu.isoformat()[:16].replace("T", " ") if fu else None,
+            "stream": {"total": total, "items": stream_items}, "categories": categories,
             "forecast": forecast, "express": express, "lhb": lhb}
 
 

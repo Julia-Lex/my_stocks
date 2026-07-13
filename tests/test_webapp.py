@@ -371,6 +371,28 @@ def test_announcements():
                       params={"date": "bad"}).status_code == 422
 
 
+def test_announcements_stream():
+    """公告流(announcement 表):按发布时刻降序、类型清单、类型/关键词服务端过滤。"""
+    d = client.get("/api/announcements", params={"date": "2026-07-13"}).json()
+    st = d["stream"]
+    assert st["total"] > 200 and 0 < len(st["items"]) <= 300
+    it = st["items"][0]
+    assert it["time"] and it["title"] and it["code"] and "url" in it
+    times = [i["time"] for i in st["items"]]
+    assert times == sorted(times, reverse=True)          # 新→旧
+    assert any(c["name"] == "业绩预告" for c in d["categories"])
+    # 类型过滤
+    d2 = client.get("/api/announcements",
+                    params={"date": "2026-07-13", "category": "业绩预告"}).json()
+    assert d2["stream"]["total"] >= 10
+    assert all(i["category"] == "业绩预告" for i in d2["stream"]["items"])
+    # 关键词过滤(标题/名称/代码)
+    d3 = client.get("/api/announcements",
+                    params={"date": "2026-07-13", "q": "盟固利"}).json()
+    assert d3["stream"]["total"] >= 3
+    assert all("盟固利" in (i["title"] + i["name"]) for i in d3["stream"]["items"])
+
+
 def test_index_kline():
     """市场指数日线 + 全市场总成交量(该市场全部个股当日 volume 之和)。"""
     r = client.get("/api/index/kline",
