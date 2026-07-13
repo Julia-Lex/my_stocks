@@ -69,28 +69,33 @@ ASTOCK_DB_USER=zhu .venv/bin/python 03_daily_update.py
 0 18 * * 1-5  cd /path/to/my_stocks && ASTOCK_DB_USER=zhu ASTOCK_DB_PASSWORD='xxx' .venv/bin/python 03_daily_update.py >> update.log 2>&1
 ```
 
-## 定时任务总表(生效快照 2026-07-11)
+## 定时任务总表(生效快照 2026-07-13)
 
 唯一事实源是系统 crontab(`crontab -l`);本表为其快照,换机重装照抄即可。
+时间点定档原则:各任务在**数据源 EOD finalize 后尽早**触发,不再统一压到晚间。
+A股受收盘防护约束(15:30 后才放行当日 bar,创业板/科创板 15:05-15:30 盘后定价),
+故 A股链最早 16:00;龙虎榜受交易所傍晚发布制约,只能 18:30。
 
 ```cron
 # 美股日线(腾讯):周二~六 09:00,拉前一交易日;指数行(新浪)周六常晚半天,自愈
 0 9 * * 2-6   cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu ASTOCK_INTL_SOURCE=tx .venv/bin/python 06_daily_update_intl.py --market us >> update_us.log 2>&1
-# A股日线(东财):工作日 18:00
-0 18 * * 1-5  cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 03_daily_update.py >> update.log 2>&1
-# 港股日线(腾讯):18:05,当晚到位(日历腾讯代理探测)
-5 18 * * 1-5  cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu ASTOCK_INTL_SOURCE=tx .venv/bin/python 06_daily_update_intl.py --market hk >> update_hk.log 2>&1
-# A股分钟线(通达信):18:30 ⚠️ 历史仅约3个月,长期断档不可补
-30 18 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 07_minute_update.py >> update_minute.log 2>&1
-# A股基本面:18:40(估值日更+披露季核查)
-40 18 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 10_fundamental_update.py >> update_fund.log 2>&1
-# 富途四连链:18:50 港基本面→美基本面→指数成分diff→港美板块diff ⚠️ 依赖 FutuOpenD 常驻
-50 18 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 13_fundamental_update_intl.py --market hk >> update_fund_hk.log 2>&1 && ASTOCK_DB_USER=zhu .venv/bin/python 13_fundamental_update_intl.py --market us >> update_fund_us.log 2>&1 && ASTOCK_DB_USER=zhu .venv/bin/python 17_index_member_intl.py >> update_idxmember.log 2>&1 && ASTOCK_DB_USER=zhu .venv/bin/python 19_board_intl.py >> update_board_intl.log 2>&1
-# A股资金流+板块二连链(富途源):19:30 起,避开港美板块链 18:50-19:20;单进程串行防跨进程限频互踩。
+# A股日线弹性链:工作日 16:00(探测优先——东财行情族可用走主源,被封直接走腾讯+24快照,不硬撞被封端点;见 25 脚本)
+0 16 * * 1-5  /Users/zhu/own/my_stocks/25_daily_ashare_chain.sh >> /Users/zhu/own/my_stocks/update.log 2>&1
+# A股分钟线(通达信):16:20 ⚠️ 历史仅约3个月,长期断档不可补
+20 16 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 07_minute_update.py >> update_minute.log 2>&1
+# A股基本面:16:40(估值日更+披露季核查)
+40 16 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 10_fundamental_update.py >> update_fund.log 2>&1
+# A股资金流+板块二连链(富途源):19:30,排在港美板块链 18:50-19:20 窗口之后(本链 ~2.4h:资金流全市场重拉~100min+板块~55min,塞不进 18:50 前)。
 # 链序:先 23 个股资金流(当日数据落库)再 21 板块(其末尾 REFRESH board_capital_flow 聚合视图才能含当日)
 30 19 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 23_capital_flow_update.py --update >> update_capflow.log 2>&1 && ASTOCK_BOARD_SOURCE=futu ASTOCK_DB_USER=zhu .venv/bin/python 21_board_update.py >> update_board.log 2>&1
-# 事件数据:19:00(龙虎榜近5日+披露季预告/快报;北向已终结默认跳过)
-0 19 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 15_events_update.py >> update_events.log 2>&1
+# 港股日线(腾讯):18:05,当晚到位(日历腾讯代理探测)〔港美会话维护〕
+5 18 * * 1-5  cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu ASTOCK_INTL_SOURCE=tx .venv/bin/python 06_daily_update_intl.py --market hk >> update_hk.log 2>&1
+# 事件数据:18:30(龙虎榜近5日+披露季预告/快报;⚠️ 交易所约 18:00 后才发布龙虎榜,再早取不到,近5日回看自愈)
+30 18 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 15_events_update.py >> update_events.log 2>&1 && ASTOCK_DB_USER=zhu .venv/bin/python 28_announcement_update.py >> update_ann.log 2>&1
+# 事件深夜二次抓取:23:00(A股晚间披露高峰到22点+,18:30单轮抓不全;龙虎榜每跑必重拉近5日,自动补当晚新公告;datacenter源,非富途/非被封)
+0 23 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 15_events_update.py >> update_events.log 2>&1 && ASTOCK_DB_USER=zhu .venv/bin/python 28_announcement_update.py >> update_ann.log 2>&1
+# 富途四连链:18:50 港基本面→美基本面→指数成分diff→港美板块diff ⚠️ 依赖 FutuOpenD 常驻〔港美会话维护〕
+50 18 * * 1-5 cd /Users/zhu/own/my_stocks && ASTOCK_DB_USER=zhu .venv/bin/python 13_fundamental_update_intl.py --market hk >> update_fund_hk.log 2>&1 && ASTOCK_DB_USER=zhu .venv/bin/python 13_fundamental_update_intl.py --market us >> update_fund_us.log 2>&1 && ASTOCK_DB_USER=zhu .venv/bin/python 17_index_member_intl.py >> update_idxmember.log 2>&1 && ASTOCK_DB_USER=zhu .venv/bin/python 19_board_intl.py >> update_board_intl.log 2>&1
 # 周全量备份:周日 03:00(本地3份轮换 + rsync NAS,脚本带未挂载守卫)
 0 3 * * 0 /Users/zhu/backups/astock/backup_astock.sh >> /Users/zhu/backups/astock/backup.log 2>&1
 ```
