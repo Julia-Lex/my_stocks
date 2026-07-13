@@ -121,6 +121,11 @@ def test_fundamental_cn():
     assert v and v["pe_ttm"] > 0 and v["pb"] > 0 and v["total_mv"] > 1e11
     i = d["indicator"]
     assert i and i["roe"] is not None and i["report_date"] >= "2026-03-31"
+    # 最新日行情:开盘/收盘/涨跌幅 + 数据日期
+    q = d["daily"]
+    assert q and q["date"] >= "2026-07-10"
+    assert q["open"] > 0 and q["close"] > 0 and q["pct_chg"] is not None
+    assert q["low"] <= q["open"] <= q["high"] and q["low"] <= q["close"] <= q["high"]
 
 
 def test_fundamental_hk():

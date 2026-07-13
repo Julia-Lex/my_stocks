@@ -586,6 +586,17 @@ async function renderQuote(){
   }
   const f = quote.fund;
   let html = '';
+  if(f && f.daily){
+    const q = f.daily;
+    const up = (q.pct_chg ?? 0) >= 0;
+    html += `<div class="sec">最新行情 <span class="note-inline">数据日期 ${q.date} · 日线收盘口径</span></div>
+    <div class="cards">
+      <div class="card"><div class="lbl">开盘</div><div class="val">${q.open ?? '—'}</div></div>
+      <div class="card"><div class="lbl">收盘</div><div class="val">${q.close ?? '—'}</div></div>
+      <div class="card"><div class="lbl">涨跌幅</div><div class="val" style="color:${up?'var(--up)':'var(--down)'}">${q.pct_chg==null?'—':(up?'+':'')+q.pct_chg.toFixed(2)+'%'}</div></div>
+      <div class="card"><div class="lbl">最高 / 最低</div><div class="val">${q.high ?? '—'} / ${q.low ?? '—'}</div></div>
+    </div>`;
+  }
   if(f){
     const v = f.valuation, i = f.indicator;
     if(f.industry) html += `<div class="sec">基本面 <span class="note-inline">行业:${f.industry}</span></div>`;

@@ -287,6 +287,18 @@ def fundamental(market: Literal["cn", "hk", "us"], code: str = Query(..., max_le
                 f"SELECT {', '.join(_IND_COLS)} FROM {qt['ind']} "
                 f"WHERE stock_code = %s ORDER BY report_date DESC LIMIT 1", (code,))
             indicator = _row_dict(_IND_COLS, cur.fetchone())
+            # 最新日行情(开/收/涨跌幅),date 字段即数据日期
+            cur.execute(
+                f"SELECT trade_date, open, close, pct_chg, high, low FROM {qt['price']} "
+                f"WHERE stock_code = %s ORDER BY trade_date DESC LIMIT 1", (code,))
+            dr = cur.fetchone()
+            daily = None if dr is None else {
+                "date": dr[0].isoformat(),
+                "open": float(dr[1]) if dr[1] is not None else None,
+                "close": float(dr[2]) if dr[2] is not None else None,
+                "pct_chg": float(dr[3]) if dr[3] is not None else None,
+                "high": float(dr[4]) if dr[4] is not None else None,
+                "low": float(dr[5]) if dr[5] is not None else None}
     finally:
         conn.close()
     if market != "cn":
@@ -298,7 +310,8 @@ def fundamental(market: Literal["cn", "hk", "us"], code: str = Query(..., max_le
                     and indicator and indicator.get("bps")):
                 valuation["pb"] = round(price / indicator["bps"], 2)
     return {"code": code, "name": name_row[0], "market": market,
-            "industry": industry, "valuation": valuation, "indicator": indicator}
+            "industry": industry, "valuation": valuation, "indicator": indicator,
+            "daily": daily}
 
 
 @app.get("/api/kline")
