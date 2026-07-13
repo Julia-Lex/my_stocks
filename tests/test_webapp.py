@@ -381,11 +381,12 @@ def test_announcements_stream():
     times = [i["time"] for i in st["items"]]
     assert times == sorted(times, reverse=True)          # 新→旧
     assert any(c["name"] == "业绩预告" for c in d["categories"])
-    # 类型过滤
+    # 类型过滤:按全标签数组匹配(categories 多标签;category 兜底未回填旧行)
     d2 = client.get("/api/announcements",
                     params={"date": "2026-07-13", "category": "业绩预告"}).json()
     assert d2["stream"]["total"] >= 10
-    assert all(i["category"] == "业绩预告" for i in d2["stream"]["items"])
+    assert all("业绩预告" in i["categories"] or i["category"] == "业绩预告"
+               for i in d2["stream"]["items"])
     # 关键词过滤(标题/名称/代码)
     d3 = client.get("/api/announcements",
                     params={"date": "2026-07-13", "q": "盟固利"}).json()

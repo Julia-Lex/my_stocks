@@ -709,8 +709,10 @@ def announcements(date_: date = Query(..., alias="date"),
             cond = "a.publish_time >= %s AND a.publish_time < %s::date + 1"
             params: list = [date_, date_]
             if category:
-                cond += " AND a.category = %s"
-                params.append(category)
+                # categories 为全标签数组(一条公告可挂多类);category 仅首标签,
+                # 单用会漏多标签行。OR category 兜底覆盖 categories 尚未回填的旧行。
+                cond += " AND (%s = ANY(a.categories) OR a.category = %s)"
+                params += [category, category]
             if q and q.strip():
                 cond += (" AND (a.title ILIKE %s OR a.stock_code ILIKE %s "
                          "OR s.name ILIKE %s)")
@@ -721,17 +723,21 @@ def announcements(date_: date = Query(..., alias="date"),
                 params)
             total = cur.fetchone()[0]
             cur.execute(
-                f"SELECT a.publish_time, a.stock_code, s.name, a.category, a.title, a.url "
+                f"SELECT a.publish_time, a.stock_code, s.name, a.category, a.title, a.url, "
+                f"a.categories "
                 f"FROM announcement a "
                 f"LEFT JOIN stock_basic s ON s.stock_code = a.stock_code "
                 f"WHERE {cond} ORDER BY a.publish_time DESC LIMIT {_ANN_STREAM_LIMIT}",
                 params)
             stream_items = [{"time": r[0].isoformat()[11:19], "code": r[1],
                              "name": r[2] or r[1], "category": r[3] or "其他",
-                             "title": r[4], "url": r[5]} for r in cur.fetchall()]
+                             "title": r[4], "url": r[5],
+                             "categories": r[6] or [r[3] or "其他"]} for r in cur.fetchall()]
+            # 类型分布按全标签展开统计(多标签公告计入其每个标签)
             cur.execute(
-                "SELECT COALESCE(category, '其他'), count(*) FROM announcement "
-                "WHERE publish_time >= %s AND publish_time < %s::date + 1 "
+                "SELECT cat, count(*) FROM ("
+                "  SELECT unnest(COALESCE(categories, ARRAY[COALESCE(category, '其他')])) AS cat "
+                "  FROM announcement WHERE publish_time >= %s AND publish_time < %s::date + 1) t "
                 "GROUP BY 1 ORDER BY 2 DESC", (date_, date_))
             categories = [{"name": r[0], "count": r[1]} for r in cur.fetchall()]
             cur.execute(
