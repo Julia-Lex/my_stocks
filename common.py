@@ -2214,3 +2214,68 @@ def fetch_hk_spot_amount() -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     return df[["stock_code"] + [c_ for c_ in ("amount", "turnover") if c_ in df.columns]]
+
+
+# ===========================================================================
+# A股公告流(发布时间到秒)。见 27_schema_announcement.sql / 28_announcement_update.py。
+# 东财公告 API(np-anotice-stock,datacenter 族,不在行情族封禁范围);与 fin_forecast/
+# express/lhb 性质不同:那些是解析后的结构化数据(无发布时分),本流是原始披露事件。
+# ===========================================================================
+_EM_ANN_URL = "https://np-anotice-stock.eastmoney.com/api/security/ann"
+
+
+def fetch_announcements(begin: str, end: str, page_size: int = 100,
+                        max_pages: int = 300) -> pd.DataFrame:
+    """东财个股公告流(begin/end 'YYYY-MM-DD',全类型,含发布时间到秒)。
+
+    列: art_code, stock_code, title, category, publish_time, url。
+    按 begin_time/end_time 日期窗口翻页;单日通常 <1000 条(<10 页),max_pages 兜底。
+    """
+    records: list[dict] = []
+    for page in range(1, max_pages + 1):
+        def _req(pg=page):
+            resp = requests.get(_EM_ANN_URL, params={
+                "sr": "-1", "client_source": "web", "f_node": "0", "s_node": "0",
+                "ann_type": "A", "page_size": str(page_size), "page_index": str(pg),
+                "begin_time": begin, "end_time": end,
+            }, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+            resp.raise_for_status()
+            return resp.json()
+
+        data = with_retry(_req)
+        lst = ((data or {}).get("data") or {}).get("list") or []
+        if not lst:
+            break
+        records.extend(lst)
+        time.sleep(0.3)   # 东财公告接口保守节流
+
+    rows = []
+    for it in records:
+        codes = it.get("codes") or []
+        a = next((c for c in codes if "A" in (c.get("ann_type") or "")), None)
+        if not a or not a.get("stock_code"):
+            continue
+        sym = str(a["stock_code"])
+        art = it.get("art_code")
+        dt = (it.get("display_time") or "")[:19]   # 'YYYY-MM-DD HH:MM:SS'(丢毫秒)
+        if not art or len(dt) < 19:
+            continue
+        cols = it.get("columns") or []
+        cat = cols[0].get("column_name") if cols else None
+        url = f"https://data.eastmoney.com/notices/detail/{sym}/{art}.html"
+        rows.append((art, to_full_code(sym), it.get("title"), cat, dt, url))
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows, columns=["art_code", "stock_code", "title",
+                                       "category", "publish_time", "url"])
+
+
+def upsert_announcements(conn, df: pd.DataFrame) -> int:
+    """公告 upsert(art_code 去重;标题/类型如被修订则更新)。"""
+    if df.empty:
+        return 0
+    rows = [(r.art_code, r.stock_code, r.title, r.category, r.publish_time, r.url)
+            for r in df.itertuples(index=False)]
+    return upsert(conn, "announcement",
+                  ["art_code", "stock_code", "title", "category", "publish_time", "url"],
+                  rows, ["art_code"], update_cols=["title", "category", "publish_time", "url"])
