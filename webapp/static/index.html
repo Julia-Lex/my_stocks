@@ -122,6 +122,9 @@
             padding:5px 12px; cursor:pointer; font-size:13px; }
   #anndate { border:1px solid var(--border); border-radius:8px; padding:5px 10px;
              font-size:14px; }
+  #annq { border:1px solid var(--border); border-radius:8px; padding:5px 12px;
+          font-size:13.5px; width:230px; outline:none; }
+  #annq:focus { border-color:var(--accent); }
   #annbody td.desc { white-space:normal; min-width:340px; max-width:560px;
                      text-align:left; color:#555; font-size:12.5px; }
   #annbody td.nm2 { text-align:left; cursor:pointer; color:var(--accent); }
@@ -228,6 +231,7 @@
       <button class="annnav" id="annprev">◀</button>
       <input type="date" id="anndate">
       <button class="annnav" id="annnext">▶</button>
+      <input id="annq" placeholder="搜索:名称 / 代码 / 摘要关键词" autocomplete="off">
       <span class="hint">A股公告级事件 · 预告/快报按披露日(晚间发布的公告标注次日日期,当晚即可查看"明天") · 龙虎榜按交易日 · 点名称跳个股</span>
     </div>
     <div id="annbody"></div>
@@ -821,14 +825,31 @@ $('#annprev').onclick = ()=>annShiftDay(-1);
 $('#annnext').onclick = ()=>annShiftDay(1);
 $('#anndate').addEventListener('change', ()=>loadAnns());
 
+let annData = null;
 async function loadAnns(){
   if(!$('#anndate').value) $('#anndate').value = new Date().toLocaleDateString('sv');
   try{
     const r = await fetch(`/api/announcements?date=${$('#anndate').value}`);
     if(!r.ok) throw new Error('公告加载失败 HTTP '+r.status);
-    renderAnns(await r.json());
+    annData = await r.json();
+    renderAnns(annFiltered());
   }catch(ex){ err(ex.message); }
 }
+// 搜索:名称/代码/摘要(预告 desc、龙虎榜 reason)关键词过滤
+function annFiltered(){
+  const q = $('#annq').value.trim().toLowerCase();
+  if(!q || !annData) return annData;
+  const hit = (...fields) => fields.some(f => (f||'').toLowerCase().includes(q));
+  return {...annData,
+    forecast: annData.forecast.filter(i=>hit(i.name, i.code, i.desc)),
+    express:  annData.express.filter(i=>hit(i.name, i.code)),
+    lhb:      annData.lhb.filter(i=>hit(i.name, i.code, i.reason))};
+}
+let annQTimer = null;
+$('#annq').addEventListener('input', ()=>{
+  clearTimeout(annQTimer);
+  annQTimer = setTimeout(()=>{ if(annData) renderAnns(annFiltered()); }, 200);
+});
 const annJump = (code, name)=>{
   document.querySelector('#mainnav .snav[data-m=stock]').click();
   $('#q').value = `${name} ${code}`;
@@ -839,8 +860,12 @@ const pctCell = p => p==null ? '<td>—</td>' :
 function renderAnns(d){
   const empty = !d.forecast.length && !d.express.length && !d.lhb.length;
   if(empty){
-    $('#annbody').innerHTML = `<div class="note">${d.date} 无公告记录` +
-      (d.nearest ? ` · <span class="backlink" id="annjump">跳到最近有公告的 ${d.nearest}</span>` : '') + '</div>';
+    const q = $('#annq').value.trim();
+    const hasRaw = annData && (annData.forecast.length || annData.express.length || annData.lhb.length);
+    $('#annbody').innerHTML = q && hasRaw
+      ? `<div class="note">当日公告中无匹配「${q.replace(/</g,'&lt;')}」的记录</div>`
+      : `<div class="note">${d.date} 无公告记录` +
+        (d.nearest ? ` · <span class="backlink" id="annjump">跳到最近有公告的 ${d.nearest}</span>` : '') + '</div>';
     const j = $('#annjump');
     if(j) j.onclick = ()=>{ $('#anndate').value = d.nearest; loadAnns(); };
     return;
