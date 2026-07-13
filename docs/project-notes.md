@@ -55,6 +55,8 @@
 
 ## 3.1 数据质检记录
 
+- **A股公告流 announcement(2026-07-13 数据会话新建)**:原始公告披露流,含**精确发布时间(到秒,东财 display_time)**+ 全部披露类型(减持/回购/重组/问询函/监管函/高管变动…)。与 fin_forecast/express/lhb 性质不同——后者是解析后的结构化数据(数字/榜单,无发布时分),本流补库内缺失的公告时间与一大类事件。源:东财公告 API `np-anotice-stock`(datacenter 族,**不在行情族封禁范围**)。表:art_code(PK,去重)/stock_code/title/category/publish_time/url。首次回填近 90 天;日更折进事件 cron 18:30+23:00(23:00 轮收当晚深夜披露)。全类型入库,筛选在查询层用 category 列。脚本 27_schema_announcement.sql / 28_announcement_update.py。
+
 - **事件晚间二次抓取(2026-07-13 数据会话)**:事件 cron 原仅 18:30 一轮,A股晚间披露高峰持续到 22 点+,单轮抓不全(分析会话 PR #6 已在公告页标注抓取时间戳)。已加第二条 cron `0 23 * * 1-5`(datacenter 源,非富途/非被封,与任何链无冲突);龙虎榜每次运行强制重拉近 5 交易日(见 15_events_update.py 清 done 逻辑),故 23:00 轮自动补 18:30 后新披露的龙虎榜/预告/快报,无需 --force。瞬时 DNS 抖动(datacenter-web 偶发解析失败)靠脚本 4 次退避重试 + 下轮龙虎榜必重拉自愈。
 
 - 板块层(board/board_daily/board_member,富途源):2026-07-11 用户对照富途牛牛人工核验,**准确无误**。行业分类为申万二级口径(名称带"Ⅱ"),板块代码即富途 plate code(SH.LISTxxxx),可随时同源复核。
