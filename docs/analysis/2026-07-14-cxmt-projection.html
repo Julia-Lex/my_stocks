@@ -1,0 +1,153 @@
+<meta charset="utf-8">
+<title>长鑫估值:国产替代 × 周期 逐年推演</title>
+<style>
+:root{
+  --page:#f9f9f7;--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;
+  --grid:#e1e0d9;--axis:#c3c2b7;--border:rgba(11,11,11,.10);
+  --blue:#2a78d6;--aqua:#1baf7a;--violet:#4a3aa7;--orange:#eb6834;--good:#006300;--bad:#d03b3b;
+}
+@media (prefers-color-scheme:dark){:root{
+  --page:#0d0d0d;--surface:#1a1a19;--ink:#fff;--ink2:#c3c2b7;--muted:#898781;
+  --grid:#2c2c2a;--axis:#383835;--border:rgba(255,255,255,.10);
+  --blue:#3987e5;--aqua:#199e70;--violet:#9085e9;--orange:#d95926;--good:#0ca30c;--bad:#e66767;}}
+:root[data-theme="light"]{--page:#f9f9f7;--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--border:rgba(11,11,11,.10);--blue:#2a78d6;--violet:#4a3aa7;--orange:#eb6834;--good:#006300;--bad:#d03b3b;}
+:root[data-theme="dark"]{--page:#0d0d0d;--surface:#1a1a19;--ink:#fff;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--border:rgba(255,255,255,.10);--blue:#3987e5;--violet:#9085e9;--orange:#d95926;--good:#0ca30c;--bad:#e66767;}
+*{box-sizing:border-box}
+body{background:var(--page);color:var(--ink);margin:0;font:15px/1.65 system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB",sans-serif;}
+.wrap{max-width:1000px;margin:0 auto;padding:40px 20px 64px}
+.eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:600}
+h1{font-size:28px;line-height:1.25;margin:6px 0 4px;text-wrap:balance;font-weight:700}
+h2{font-size:19px;margin:0 0 4px;font-weight:650}h3{font-size:14px;margin:0 0 6px}
+.sub{color:var(--ink2);margin:0 0 8px;max-width:74ch}
+.note{color:var(--muted);font-size:12.5px}
+section{margin-top:34px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px;margin-top:12px;position:relative}
+.warn{background:color-mix(in srgb,var(--orange) 8%,var(--surface));border-color:color-mix(in srgb,var(--orange) 30%,var(--border))}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-top:20px}
+.tile{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px}
+.tile .k{font-size:12px;color:var(--muted)}.tile .v{font-size:22px;font-weight:700;margin-top:2px}.tile .d{font-size:12.5px;color:var(--ink2);margin-top:2px}
+svg{display:block;width:100%;height:auto}
+svg text{font:11.5px system-ui,"PingFang SC",sans-serif;fill:var(--muted)}
+svg text.lbl{font-weight:600;font-size:12px}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12.5px;color:var(--ink2);margin:6px 2px 2px}
+.legend .sw{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:6px}
+table{border-collapse:collapse;width:100%;font-size:13px;font-variant-numeric:tabular-nums}
+th{color:var(--muted);font-weight:600;text-align:right;padding:6px 9px;border-bottom:1px solid var(--axis);white-space:nowrap}
+td{padding:6px 9px;text-align:right;border-bottom:1px solid var(--grid);white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+.tablewrap{overflow-x:auto}
+.rowh td{font-weight:650;background:color-mix(in srgb,var(--blue) 5%,transparent)}
+ul{margin:8px 0;padding-left:20px;color:var(--ink2)}li{margin:5px 0}a{color:var(--blue)}
+.foot{margin-top:40px;padding-top:14px;border-top:1px solid var(--grid);color:var(--muted);font-size:12.5px}
+</style>
+<div class="wrap">
+<header>
+  <div class="eyebrow">估值框架推演 · 2026-2030 · 情景假设,非预测</div>
+  <h1>长鑫值 20 倍还是 100 倍?——国产替代 × 周期的逐年 PE 推演</h1>
+  <p class="sub">回答两个问题:①为什么海力士(周期顶)只有 ~10 倍 PE、A 股半导体动辄几十上百倍;②长鑫多出的"国产替代"这重逻辑,按份额逐年上升测算,PE 会怎么变。<b>核心发现(可能颠覆直觉):在 2 万亿市值下,长鑫近期真实 PE 不是 20 倍,而是 100 倍以上——"20 倍"只有当它做到接近全球一线份额(利润千亿级)才成立。所以 2 万亿是"国产替代长期成功"的成长定价,不是"便宜的周期股"。</b></p>
+</header>
+
+<div class="card warn">
+  <b>数据前提(务必先读)</b>:全球 DRAM 市场规模、长鑫份额、周期净利率——<b>库里都没有</b>(已登记数据会话移交清单 #5/#7)。下面全部是<b>公开假设的情景推演,不是预测</b>;长鑫刚上市、财报未入库,盈利锚用公开报道(本身口径不一)。用途是<b>讲清"份额×周期→PE"的机制</b>,绝对数字请当敏感性、不要当目标价。不构成投资建议。
+</div>
+
+<section>
+  <h2>一、为什么海外周期股 PE 比 A 股低那么多</h2>
+  <div class="card"><ul style="margin:2px 0">
+    <li><b>投资者结构</b>:A 股散户占成交约七成,追题材、给成长/故事溢价;海外机构主导,用 DCF、按<b>正常化(mid-cycle)利润</b>给周期股定价,严守"顶部利润→低倍数"纪律(海力士周期顶也才 ~10 倍)。</li>
+    <li><b>资金封闭 + 稀缺溢价</b>:A 股相对封闭,内地充裕流动性只能追境内有限优质资产,天然抬估值;海外资金全球配置,不为单一市场付溢价。</li>
+    <li><b>成长空间不同</b>:海力士/美光份额稳定、成熟→增速≈行业→低 PE;A 股半导体有<b>国产替代</b>的份额提升逻辑,市场把"未来抢份额"提前定价→更高 PE。这是长鑫比海力士贵的核心合理性。</li>
+    <li><b>微观结构</b>:涨跌停、T+1、打新、指数被动配置,共同抬高 A 股估值中枢。</li>
+  </ul></div>
+</section>
+
+<section>
+  <h2>二、长鑫的第三重逻辑:从 ~6% 份额往上抢</h2>
+  <p class="sub">全球 DRAM 约 950 亿美元,三星/海力士/美光占约 95%,长鑫现约 5-7%。这让长鑫不是"份额不变的成熟周期股"(海力士),而是<b>"份额逐年上升的成长型周期股"</b>——即便 DRAM 价格回落,靠抢份额也能让营收比成熟龙头平滑。三种份额路径:</p>
+  <div class="card"><div id="c-share"></div><div class="legend" id="lg-share"></div></div>
+</section>
+
+<section>
+  <h2>三、逐年推演:2 万亿市值下 PE 怎么走</h2>
+  <p class="sub">自下而上、内部一致:<b>营收 = 全球 DRAM 市场 × 长鑫份额;净利 = 营收 × 净利率;PE = 2 万亿 ÷ 净利</b>。全球 DRAM(亿美元)假设 2026 高位 1000 → 2027-28 周期回落 850/950 → 2029-30 AI 驱动 1100/1250。虚线为海力士 ~10 倍参照。</p>
+  <div class="card"><div id="c-pe"></div><div class="legend" id="lg-pe"></div><div class="tip" id="tip" style="position:absolute;pointer-events:none;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:12px;box-shadow:0 2px 10px rgba(0,0,0,.12);display:none;color:var(--ink2)"></div></div>
+  <div class="card tablewrap"><table id="tbl"></table></div>
+</section>
+
+<section>
+  <h2>四、关键结论</h2>
+  <div class="card"><ul style="margin:2px 0">
+    <li><b>"20 倍公允 PE"是个误导</b>。在 2 万亿市值下,长鑫近期(2026)真实 PE 在<b>中性情景约 130 倍、乐观也有约 100 倍</b>——因为 5-7% 份额对应的净利只有百来亿。要让 PE 落到 20 倍,长鑫得先赚到 ~1000 亿,那需要<b>接近全球 35% 份额(与三星/海力士并列)</b>——那是国产替代的终局,不是当下。所以"20 倍"其实是<b>2030 年往后、且替代大获全胜</b>那一档的数字。</li>
+    <li><b>2 万亿 = 成长定价,不是便宜周期股</b>。长鑫和海力士的估值差(百倍 vs 10 倍)几乎全部是<b>国产替代的份额成长溢价</b>。你买的不是"顶部利润的低 PE",而是"用今天百倍的价格,赌它 5 年后长成 30-50 倍"。</li>
+    <li><b>PE 随份额上升而下降("成长消化估值")</b>:中性情景 PE 从 2026 的 ~130 倍降到 2030 的 ~53 倍;乐观降到 ~33 倍。<b>但即便乐观,2030 仍是海力士(10 倍)的 3 倍以上</b>——A 股的结构性溢价 + 尚未走完的替代空间。</li>
+    <li><b>最大的风险是"周期先于份额到顶"</b>:悲观情景(2027-28 DRAM 价格大跌、净利率砸到个位数),PE 会<b>飙到 200-600 倍</b>(利润坍塌、市值还在)——如果周期下行赶在份额做大之前,估值会非常难看。这正是"顶部利润 + 高估值"组合的雷。</li>
+  </ul></div>
+</section>
+
+<section>
+  <h2>五、口径与局限</h2>
+  <ul>
+    <li>库内数据仅用于对照(中芯/海力士估值);长鑫份额、全球 DRAM 市场、周期净利率<b>全部为公开假设</b>,已登记数据缺口(移交 #5 商品价格、#7 运营/行业数据)。</li>
+    <li>盈利锚:长鑫刚上市、财报未入库;公开报道的"2026E 1500-2000 亿净利"与其 5-7% 份额不自洽(需 35%+ 份额才可能),本模型改用自下而上、内部一致的口径,故净利数量级低于该报道。</li>
+    <li>市值固定 2 万亿是为了纯看 PE 随利润变化;真实市值会波动,PE 路径需同步调整。DRAM 周期拐点不可预测,情景仅为思考框架。</li>
+    <li>复跑/改假设:docs/analysis/cxmt_projection.py(份额/净利率/市场规模均在脚本顶部,可调)。</li>
+  </ul>
+</section>
+<div class="foot">生成于 2026-07-14 · my_stocks · 情景推演非投资建议</div>
+</div>
+
+<script>
+const DATA = {"mkt_cap": 20000, "years": [2026, 2027, 2028, 2029, 2030], "dram": {"2026": 1000, "2027": 850, "2028": 950, "2029": 1100, "2030": 1250}, "hynix_pe": 10, "scenarios": {"乐观(替代快+周期强)": {"share": [8, 11, 14, 17, 20], "margin": [35, 32, 30, 32, 34], "rev": [576.0, 673.0, 958.0, 1346.0, 1800.0], "profit": [202.0, 215.0, 287.0, 431.0, 612.0], "pe": [99.0, 93.0, 69.7, 46.4, 32.7], "color": "good"}, "中性(份额稳升+周期波动)": {"share": [7, 9, 11, 13, 15], "margin": [30, 22, 22, 26, 28], "rev": [504.0, 551.0, 752.0, 1030.0, 1350.0], "profit": [151.0, 121.0, 165.0, 268.0, 378.0], "pe": [132.5, 165.3, 121.2, 74.6, 52.9], "color": "blue"}, "悲观(2027-28周期大跌)": {"share": [6, 7, 8, 10, 12], "margin": [22, 8, 6, 14, 20], "rev": [432.0, 428.0, 547.0, 792.0, 1080.0], "profit": [95.0, 34.0, 33.0, 111.0, 216.0], "pe": [210.5, 588.2, 606.1, 180.2, 92.6], "color": "bad"}}};
+const Y = DATA.years, SC = DATA.scenarios;
+const col = c => c==='good'?'var(--good)':c==='bad'?'var(--bad)':'var(--blue)';
+
+// 份额路径
+(function(){
+  const el=document.getElementById('c-share');
+  const W=940,H=240,m={t:14,r:60,b:28,l:40};const iw=W-m.l-m.r,ih=H-m.t-m.b;
+  const X=i=>m.l+i/(Y.length-1)*iw, Yv=v=>m.t+ih-(v-4)/(22-4)*ih;
+  let s='<svg viewBox="0 0 '+W+' '+H+'">';
+  [5,10,15,20].forEach(t=>{s+='<line x1="'+m.l+'" x2="'+(W-m.r)+'" y1="'+Yv(t)+'" y2="'+Yv(t)+'" stroke="var(--grid)"/><text x="'+(m.l-6)+'" y="'+(Yv(t)+4)+'" text-anchor="end">'+t+'%</text>';});
+  Y.forEach((y,i)=>s+='<text x="'+X(i)+'" y="'+(H-8)+'" text-anchor="middle">'+y+'</text>');
+  Object.entries(SC).forEach(([n,d])=>{const c=col(d.color);
+    s+='<path d="M'+d.share.map((v,i)=>X(i).toFixed(1)+' '+Yv(v).toFixed(1)).join('L')+'" fill="none" stroke="'+c+'" stroke-width="2.4"/>';
+    const p=d.share.length-1;s+='<text class="lbl" x="'+(X(p)+6)+'" y="'+(Yv(d.share[p])+4)+'" style="fill:'+c+'">'+d.share[p]+'%</text>';});
+  s+='</svg>';el.innerHTML=s;
+  document.getElementById('lg-share').innerHTML=Object.entries(SC).map(([n,d])=>'<span><span class="sw" style="background:'+col(d.color)+'"></span>'+n+'</span>').join('')+'<span class="note">纵轴=长鑫全球 DRAM 份额</span>';
+})();
+
+// PE 路径(对数轴,悲观飙到600)
+(function(){
+  const el=document.getElementById('c-pe'),tip=document.getElementById('tip');
+  const W=940,H=340,m={t:16,r:60,b:28,l:44};const iw=W-m.l-m.r,ih=H-m.t-m.b;
+  const lo=Math.log10(8),hi=Math.log10(700);
+  const X=i=>m.l+i/(Y.length-1)*iw, Yv=v=>m.t+ih-(Math.log10(Math.max(8,Math.min(700,v)))-lo)/(hi-lo)*ih;
+  let s='<svg viewBox="0 0 '+W+' '+H+'">';
+  [10,20,50,100,200,500].forEach(t=>{s+='<line x1="'+m.l+'" x2="'+(W-m.r)+'" y1="'+Yv(t)+'" y2="'+Yv(t)+'" stroke="var(--grid)"/><text x="'+(m.l-6)+'" y="'+(Yv(t)+4)+'" text-anchor="end">'+t+'x</text>';});
+  // 海力士参照
+  s+='<line x1="'+m.l+'" x2="'+(W-m.r)+'" y1="'+Yv(10)+'" y2="'+Yv(10)+'" stroke="var(--muted)" stroke-dasharray="5 4"/><text x="'+(W-m.r)+'" y="'+(Yv(10)-5)+'" text-anchor="end" style="fill:var(--muted)">海力士 ~10x</text>';
+  Y.forEach((y,i)=>s+='<text x="'+X(i)+'" y="'+(H-8)+'" text-anchor="middle">'+y+'</text>');
+  Object.entries(SC).forEach(([n,d])=>{const c=col(d.color);
+    s+='<path d="M'+d.pe.map((v,i)=>X(i).toFixed(1)+' '+Yv(v).toFixed(1)).join('L')+'" fill="none" stroke="'+c+'" stroke-width="2.6"/>';
+    d.pe.forEach((v,i)=>s+='<circle cx="'+X(i)+'" cy="'+Yv(v)+'" r="3.5" fill="'+c+'" stroke="var(--surface)" stroke-width="1.5"/>');
+    const p=d.pe.length-1;s+='<text class="lbl" x="'+(X(p)+6)+'" y="'+(Yv(d.pe[p])+4)+'" style="fill:'+c+'">'+d.pe[p]+'x</text>';});
+  s+='</svg>';el.innerHTML=s;
+  document.getElementById('lg-pe').innerHTML=Object.entries(SC).map(([n,d])=>'<span><span class="sw" style="background:'+col(d.color)+'"></span>'+n+'</span>').join('')+'<span class="note">纵轴对数;PE=2万亿÷净利</span>';
+})();
+
+// 表
+(function(){
+  const rows=[['全球DRAM(亿$)',y=>DATA.dram[y]]];
+  let s='<thead><tr><th>情景 / 指标</th>'+Y.map(y=>'<th>'+y+'</th>').join('')+'</tr></thead><tbody>';
+  s+='<tr><td>全球 DRAM(亿美元)</td>'+Y.map(y=>'<td>'+DATA.dram[y]+'</td>').join('')+'</tr>';
+  Object.entries(SC).forEach(([n,d])=>{
+    s+='<tr class="rowh"><td style="color:'+col(d.color)+'">'+n+'</td>'+Y.map(()=>'<td></td>').join('')+'</tr>';
+    s+='<tr><td>　份额 %</td>'+d.share.map(v=>'<td>'+v+'%</td>').join('')+'</tr>';
+    s+='<tr><td>　净利率 %</td>'+d.margin.map(v=>'<td>'+v+'%</td>').join('')+'</tr>';
+    s+='<tr><td>　营收(亿)</td>'+d.rev.map(v=>'<td>'+v.toFixed(0)+'</td>').join('')+'</tr>';
+    s+='<tr><td>　归母净利(亿)</td>'+d.profit.map(v=>'<td>'+v.toFixed(0)+'</td>').join('')+'</tr>';
+    s+='<tr><td>　<b>PE(市值2万亿)</b></td>'+d.pe.map(v=>'<td style="color:'+col(d.color)+'"><b>'+v+'x</b></td>').join('')+'</tr>';
+  });
+  document.getElementById('tbl').innerHTML=s+'</tbody>';
+})();
+</script>
