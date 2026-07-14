@@ -43,6 +43,22 @@ print("\n业绩快报:", ex.to_dict("records"))
 
 lhb_map = {str(r.trade_date.date()): dict(reason=r.reason, buy=round(r.buy_w,0), sell=round(r.sell_w,0))
            for r in lhb.itertuples()}
+# 第一板(2026-07-09)分时:一字涨停成交结构
+mv = pd.read_sql("select to_char(trade_time,'HH24:MI') t, volume v from minute_price "
+                 "where stock_code=%s and trade_time::date='2026-07-09' order by trade_time",
+                 CONN, params=(CODE,))
+sc = pd.read_sql("select float_shares from share_capital where stock_code=%s "
+                 "order by change_date desc limit 1", CONN, params=(CODE,))
+float_sh = int(sc.float_shares.iloc[0]) if len(sc) else None
+intra = dict(
+    date="2026-07-09", limit_price=26.03, pre_close=23.66,
+    vols=[int(x) for x in mv.v], times=[str(t) for t in mv.t],
+    day_vol=int(mv.v.sum()), first_min=int(mv.v.iloc[0]),
+    first_min_pct=round(float(mv.v.iloc[0]/mv.v.sum()), 4),
+    float_shares=float_sh,
+    day_vol_pct_float=round(float(mv.v.sum()/float_sh), 4) if float_sh else None,
+)
+
 out = dict(
     code=CODE, name="亚联机械",
     base_date="2026-07-08", base_close=base, last_close=last,
@@ -61,6 +77,7 @@ out = dict(
     forecast=[dict(t=r.forecast_type, pct=float(r.change_pct) if pd.notna(r.change_pct) else None,
                    desc=r.change_desc) for r in fc.itertuples()],
     ann=[dict(t=str(r.publish_time), cat=r.category, title=r.title) for r in ann.itertuples()],
+    intra=intra,
 )
 path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "yalian_data.json")
 json.dump(out, open(path, "w"), ensure_ascii=False, default=str)
