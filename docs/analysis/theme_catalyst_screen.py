@@ -47,12 +47,29 @@ sc = pd.read_sql("""select distinct on (stock_code) stock_code, float_shares fro
   where stock_code=any(%s) order by stock_code, change_date desc""", CONN, params=(codes,))
 px = pd.read_sql("select stock_code, trade_date, close from daily_price where stock_code=any(%s) "
   "and trade_date >= %s::date - interval '100 days' order by 1,2", CONN, params=(codes, VAL_DATE))
+def logfit(closes):
+    y=np.log(np.asarray(closes,float)); x=np.arange(len(y))
+    b,a=np.polyfit(x,y,1)
+    r2=1-np.sum((y-(a+b*x))**2)/max(np.sum((y-y.mean())**2),1e-12)
+    return b, r2
+def phase(b60,r2,b20):
+    d60=np.exp(b60)-1  # 60日日均涨
+    if d60<=0.002: return "未启动"
+    if d60>0.015: return "冲高回落" if (np.exp(b20)-1)<-0.003 else "主升加速"
+    if d60>=0.002 and r2>=0.6: return "早期爬升"   # 宏和早期型(黄金)
+    return "缓升震荡"
 r = {}
 for c,g in px.groupby("stock_code"):
-    g=g.reset_index(drop=True)
-    r[c]=dict(close=float(g.close.iloc[-1]),
-              r60=float(g.close.iloc[-1]/g.close.iloc[0]-1) if len(g)>=55 else None,
-              r20=float(g.close.iloc[-1]/g.close.iloc[-21]-1) if len(g)>=21 else None)
+    g=g.reset_index(drop=True); cl=g.close.astype(float)
+    b60=r2=b20=None
+    if len(g)>=55: b60,r2=logfit(cl.tail(60))
+    if len(g)>=21: b20,_=logfit(cl.tail(21))
+    ph = phase(b60,r2,b20) if (b60 is not None and b20 is not None) else "数据不足"
+    r[c]=dict(close=float(cl.iloc[-1]),
+              r60=float(cl.iloc[-1]/cl.iloc[0]-1) if len(g)>=55 else None,
+              r20=float(cl.iloc[-1]/cl.iloc[-21]-1) if len(g)>=21 else None,
+              slope60=float(np.exp(b60)-1) if b60 is not None else None,
+              r2=float(r2) if r2 is not None else None, phase=ph)
 
 m = strong.merge(val, on="stock_code").merge(sc, on="stock_code", how="left")
 m["themes"] = m.stock_code.map(lambda c: themes.get(c, []))
@@ -62,17 +79,22 @@ m["close"] = m.stock_code.map(lambda c: r.get(c,{}).get("close"))
 m["r60"] = m.stock_code.map(lambda c: r.get(c,{}).get("r60"))
 m["r20"] = m.stock_code.map(lambda c: r.get(c,{}).get("r20"))
 m["float_mv"] = (m.float_shares*m.close/1e8).round(1)
+m["slope60"] = m.stock_code.map(lambda c: r.get(c,{}).get("slope60"))
+m["r2"] = m.stock_code.map(lambda c: r.get(c,{}).get("r2"))
+m["phase"] = m.stock_code.map(lambda c: r.get(c,{}).get("phase"))
 m["type"] = np.where(m.r60.fillna(0)>0.5, "已启动", "潜伏")
 # 排序:题材数↓ + 潜伏优先(近60日↑)
 m = m.sort_values(["nth","r60"], ascending=[False, True]).reset_index(drop=True)
 
 pd.set_option("display.width",240,"display.max_rows",80)
 show=m.copy(); show["题材"]=show.themes.apply(lambda x: "/".join(x[:3])+("…" if len(x)>3 else ""))
+print("宏和参照:全程日斜率+0.94%/R²0.93,近半年+1.64%,最陡+2.41%(已抛物线末段)")
+print("阶段分布:", m.phase.value_counts().to_dict())
 print(f"候选(强业绩+题材+市值≤500亿+非ST): {len(m)} 只\n")
 print(show[["stock_code","name","mv_yi","nth","题材","yoy","np_yi","r20","r60","type"]].round(2).head(45).to_string(index=False))
 
 out=dict(val_date=VAL_DATE, n=len(m),
-  rows=json.loads(m[["stock_code","name","mv_yi","float_mv","nth","yoy","np_yi","r20","r60","type"]].round(4).to_json(orient="records",force_ascii=False)),
+  rows=json.loads(m[["stock_code","name","mv_yi","float_mv","nth","yoy","np_yi","r20","r60","slope60","r2","phase","type"]].round(4).to_json(orient="records",force_ascii=False)),
   themes={r["stock_code"]: r["themes"] for _,r in m.iterrows()})
 path=os.path.join(os.path.dirname(os.path.abspath(__file__)),"theme_data.json")
 json.dump(out, open(path,"w"), ensure_ascii=False)
