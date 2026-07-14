@@ -809,7 +809,10 @@ let ffPeriod = 'today';   // 资金流周期(仅A股)
 let ffCache = {};         // `${btype}:${ffPeriod}` → fundflow 响应
 const FFPERIODS = [['today','今日'],['5d','近5日'],['20d','近20日']];
 
+let annsScrollY = 0;   // 离开公告页时的滚动位置(点股票跳转后切回时恢复)
 document.querySelectorAll('#mainnav .snav').forEach(t=>t.onclick=()=>{
+  // 切走公告页前记住滚动位置(此时 display 还没切,scrollY 仍是公告页的真实值)
+  if(mode==='anns') annsScrollY = window.scrollY;
   mode = t.dataset.m;
   document.querySelectorAll('#mainnav .snav').forEach(x=>x.classList.toggle('on', x===t));
   $('#stockpane').style.display = mode==='stock' ? 'flex' : 'none';
@@ -819,7 +822,11 @@ document.querySelectorAll('#mainnav .snav').forEach(t=>t.onclick=()=>{
   $('#todos').style.display = mode==='todos' ? 'block' : 'none';
   if(mode==='boards' && !snap[sk()]) loadBoards();
   if(mode==='indices') loadIndices();
-  if(mode==='anns') loadAnns();
+  if(mode==='anns'){
+    // 已加载过:保留原 DOM,不重刷,恢复滚动位置;首次进入才加载
+    if(annData) requestAnimationFrame(()=>window.scrollTo(0, annsScrollY));
+    else loadAnns();
+  }
   if(mode==='todos') loadTodos();
 });
 
