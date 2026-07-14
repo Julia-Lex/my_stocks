@@ -1,0 +1,165 @@
+<meta charset="utf-8">
+<title>亚联机械 财报后三连板复盘</title>
+<style>
+:root{
+  --page:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e; --muted:#898781;
+  --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.10);
+  --blue:#2a78d6; --aqua:#1baf7a; --violet:#4a3aa7; --red:#e34948; --orange:#eb6834; --yellow:#eda100;
+  --cmp:#c3c2b7; --up:#d03b3b; --down:#008300;
+}
+@media (prefers-color-scheme: dark){:root{
+  --page:#0d0d0d; --surface:#1a1a19; --ink:#ffffff; --ink2:#c3c2b7; --muted:#898781;
+  --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10);
+  --blue:#3987e5; --aqua:#199e70; --violet:#9085e9; --red:#e66767; --orange:#d95926; --yellow:#c98500;
+  --cmp:#52514e; --up:#e66767; --down:#0ca30c;
+}}
+:root[data-theme="light"]{
+  --page:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e; --muted:#898781;
+  --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.10);
+  --blue:#2a78d6; --violet:#4a3aa7; --cmp:#c3c2b7; --up:#d03b3b; --down:#008300; --orange:#eb6834;
+}
+:root[data-theme="dark"]{
+  --page:#0d0d0d; --surface:#1a1a19; --ink:#ffffff; --ink2:#c3c2b7; --muted:#898781;
+  --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10);
+  --blue:#3987e5; --violet:#9085e9; --cmp:#52514e; --up:#e66767; --down:#0ca30c; --orange:#d95926;
+}
+*{box-sizing:border-box}
+body{background:var(--page);color:var(--ink);margin:0;
+  font:15px/1.65 system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB",sans-serif;}
+.wrap{max-width:900px;margin:0 auto;padding:40px 20px 64px}
+.eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:600}
+h1{font-size:28px;line-height:1.25;margin:6px 0 4px;text-wrap:balance;font-weight:700}
+h2{font-size:18px;margin:0 0 4px;font-weight:650}
+.sub{color:var(--ink2);margin:0 0 8px}
+.note{color:var(--muted);font-size:12.5px}
+section{margin-top:32px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px;margin-top:12px;position:relative}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-top:20px}
+.tile{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px}
+.tile .k{font-size:12px;color:var(--muted)}
+.tile .v{font-size:23px;font-weight:700;margin-top:2px}
+.tile .d{font-size:12.5px;color:var(--ink2);margin-top:2px}
+.up{color:var(--up)} .down{color:var(--down)}
+svg{display:block;width:100%;height:auto}
+svg text{font:11px system-ui,"PingFang SC",sans-serif;fill:var(--muted)}
+svg text.lbl{font-weight:600;font-size:11.5px}
+table{border-collapse:collapse;width:100%;font-size:13px;font-variant-numeric:tabular-nums}
+th{color:var(--muted);font-weight:600;text-align:right;padding:6px 8px;border-bottom:1px solid var(--axis);white-space:nowrap}
+td{padding:6px 8px;text-align:right;border-bottom:1px solid var(--grid);white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+tr.evt td{background:color-mix(in srgb,var(--orange) 8%,transparent)}
+.tablewrap{overflow-x:auto}
+ul{margin:8px 0;padding-left:20px;color:var(--ink2)}
+li{margin:5px 0}
+.tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:99px;font-weight:600;background:color-mix(in srgb,var(--blue) 15%,transparent);color:var(--blue)}
+.foot{margin-top:36px;padding-top:14px;border-top:1px solid var(--grid);color:var(--muted);font-size:12.5px}
+</style>
+<div class="wrap">
+<header>
+  <div class="eyebrow">个股复盘 · 亚联机械 001395.SZ · 数据截至 2026-07-13</div>
+  <h1>业绩预告点火,三连板,但第三板龙虎榜已翻净卖出</h1>
+  <p class="sub">最近两周走势可以一刀切成两段:<b>7-08 之前平淡阴跌</b>(23~24.6 元窄幅),<b>7-08 晚发半年业绩预告(净利 +60%)后三个交易日连续涨停</b>(7-09/10/13),累计 <b>+33%</b>。但第三个板放出 22% 换手的天量、龙虎榜转为净卖出——财报驱动的一致预期正在转向分歧。</p>
+</header>
+
+<div class="tiles">
+  <div class="tile"><div class="k">财报后三连板累计</div><div class="v up">+33.1%</div><div class="d">7-08 收 23.66 → 7-13 收 31.49</div></div>
+  <div class="tile"><div class="k">半年净利(快报)</div><div class="v up">+60.1%</div><div class="d">1.57 亿元,扣非 +63%</div></div>
+  <div class="tile"><div class="k">第三板换手</div><div class="v">22.4%</div><div class="d">前两日仅 0~7%;放天量=分歧</div></div>
+  <div class="tile"><div class="k">龙虎榜(7-13)</div><div class="v down">净卖 −1,787万</div><div class="d">卖 5,702 万 &gt; 买 3,915 万</div></div>
+</div>
+
+<section>
+  <h2>一、两周走势:一条平线 + 一根三连板的陡坡</h2>
+  <div class="card"><div id="c-px"></div><div class="note" id="lg" style="margin-top:6px"></div><div class="tip" id="tip" style="position:absolute;pointer-events:none;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:12px;box-shadow:0 2px 10px rgba(0,0,0,.12);display:none;z-index:5;color:var(--ink2)"></div></div>
+</section>
+
+<section>
+  <h2>二、财报后的反应:逐日拆解</h2>
+  <div class="card tablewrap"><table id="tbl"></table>
+  <div class="note" style="margin-top:8px">橙色行为催化事件日。7-09 一字涨停(开盘即封、换手极低=想买买不到);7-10 二板,龙虎榜游资净买入;7-13 三板但换手骤升至 22%、龙虎榜净卖出——这是"锁筹结构被打开、资金开始高位派发"的典型标志。</div></div>
+</section>
+
+<section>
+  <h2>三、事件链与解读</h2>
+  <div class="card">
+    <table id="tbl-ann" style="margin-bottom:12px"></table>
+    <ul style="margin-top:4px">
+      <li><b>催化明确</b>:7-08 盘后半年度业绩预告(归母 +59.63%、扣非 +63.03%),7-12 业绩快报确认(净利 1.57 亿 +60%、营收 +37%、EPS 1.39 元)。基本面是真的,不是纯概念炒作。</li>
+      <li><b>财报后反应=情绪三段式</b>:一字板(预期强、买不到)→ 二板游资进场 → 三板放天量分歧。<b>换手从 &lt;1% 跳到 22%、龙虎榜由净买转净卖,是本轮情绪的温度计拐点</b>——愿意在涨停板上卖的资金变多了。</li>
+      <li><b>估值不是当前矛盾</b>:三连板后 PE_TTM 仍只有 14.5 倍(因利润确实增长约 60%),PB 2.15→2.87。风险不在"估值贵",在<b>小盘股(市值 27→36 亿)游资接力的持续性</b>——这类三连板后常见"高位震荡/补跌"消化获利盘。</li>
+      <li><b>历史参照</b>:该股 2025-04 曾有一轮 20%+ 换手的剧烈波动(龙虎榜留痕),是活跃小盘,波动天然大。</li>
+    </ul>
+    <div class="note">口径:本地库日线/估值(daily_valuation)/龙虎榜(lhb_detail)/业绩预告快报(fin_forecast、fin_express)/公告流(announcement,精确到秒)。均为库内数据,未调外部接口。个股复盘非投资建议。</div>
+  </div>
+</section>
+<div class="foot">生成于 2026-07-14 · my_stocks 数据库 · 待办 #49 · docs/analysis/yalian_analysis.py 可复跑</div>
+</div>
+
+<script>
+const DATA = {"code": "001395.SZ", "name": "亚联机械", "base_date": "2026-07-08", "base_close": 23.66, "last_close": 31.49, "run_pct": 0.3309, "daily": [{"d": "2026-06-24", "o": 25.3, "h": 25.49, "l": 24.45, "c": 24.68, "pct": -3.37, "vol": 822100, "amt": 20365886.81, "to": 1.58, "pe": 15.8622, "pb": 2.2466, "mv": 27.9900816, "lhb": null}, {"d": "2026-06-25", "o": 24.6, "h": 24.87, "l": 23.82, "c": 24.13, "pct": -2.23, "vol": 825600, "amt": 19932328.62, "to": 1.59, "pe": 15.5087, "pb": 2.1966, "mv": 27.3663156, "lhb": null}, {"d": "2026-06-26", "o": 24.0, "h": 24.17, "l": 23.38, "c": 23.65, "pct": -1.99, "vol": 1107600, "amt": 26197067.06, "to": 2.13, "pe": 15.2002, "pb": 2.1529, "mv": 26.821938, "lhb": null}, {"d": "2026-06-29", "o": 23.64, "h": 23.98, "l": 22.81, "c": 23.28, "pct": -1.56, "vol": 763600, "amt": 17833698.95, "to": 1.47, "pe": 14.9624, "pb": 2.1192, "mv": 26.4023136, "lhb": null}, {"d": "2026-06-30", "o": 23.28, "h": 23.53, "l": 22.96, "c": 23.3, "pct": 0.09, "vol": 729100, "amt": 16927872.32, "to": 1.4, "pe": 14.9753, "pb": 2.121, "mv": 26.424996, "lhb": null}, {"d": "2026-07-01", "o": 23.4, "h": 23.86, "l": 23.14, "c": 23.53, "pct": 0.99, "vol": 863400, "amt": 20254829.52, "to": 1.66, "pe": 15.1231, "pb": 2.1419, "mv": 26.6858436, "lhb": null}, {"d": "2026-07-02", "o": 23.56, "h": 24.19, "l": 23.53, "c": 23.77, "pct": 1.02, "vol": 785200, "amt": 18768097.51, "to": 1.51, "pe": 15.2774, "pb": 2.1638, "mv": 26.9580324, "lhb": null}, {"d": "2026-07-03", "o": 23.77, "h": 24.79, "l": 23.62, "c": 24.6, "pct": 3.49, "vol": 968500, "amt": 23714646.08, "to": 1.86, "pe": 15.8108, "pb": 2.2393, "mv": 27.899352, "lhb": null}, {"d": "2026-07-06", "o": 24.6, "h": 25.05, "l": 24.5, "c": 24.61, "pct": 0.04, "vol": 812600, "amt": 20067116.3, "to": 1.56, "pe": 15.8172, "pb": 2.2402, "mv": 27.9106932, "lhb": null}, {"d": "2026-07-07", "o": 24.59, "h": 24.74, "l": 23.93, "c": 24.02, "pct": -2.4, "vol": 569900, "amt": 13785743.36, "to": 1.1, "pe": 15.438, "pb": 2.1865, "mv": 27.2415624, "lhb": null}, {"d": "2026-07-08", "o": 24.02, "h": 24.15, "l": 23.5, "c": 23.66, "pct": -1.5, "vol": 637600, "amt": 15123749.25, "to": 1.23, "pe": 15.2067, "pb": 2.1538, "mv": 26.8332792, "lhb": null}, {"d": "2026-07-09", "o": 26.03, "h": 26.03, "l": 26.03, "c": 26.03, "pct": 10.0169, "vol": 628700, "amt": 16365738.0, "to": null, "pe": 16.7299, "pb": 2.3695, "mv": 29.5211436, "lhb": null}, {"d": "2026-07-10", "o": 28.11, "h": 28.63, "l": 27.85, "c": 28.63, "pct": 9.99, "vol": 3796500, "amt": 107970000.0, "to": 7.3, "pe": 18.401, "pb": 2.6062, "mv": 32.4698556, "lhb": {"reason": "连续三个交易日内，涨幅偏离值累计达到20%的证券", "buy": 3086.0, "sell": 2375.0}}, {"d": "2026-07-13", "o": 28.8, "h": 31.49, "l": 28.6, "c": 31.49, "pct": 9.99, "vol": 11640600, "amt": 357070000.0, "to": 22.38, "pe": 14.5119, "pb": 2.8665, "mv": 35.7134388, "lhb": {"reason": "日涨幅偏离值达到7%的前5只证券", "buy": 3915.0, "sell": 5702.0}}], "express": {"ann_date": "2026-07-13", "np": 1.574229, "npy": 60.0568, "rev": 5.147427, "revy": 36.9333, "eps": 1.39}, "forecast": [{"t": "归属于上市公司股东的净利润", "pct": 59.63, "desc": "预计2026年1-6月归属于上市公司股东的净利润盈利:15,700万元,同比上年增长:59.63%。"}, {"t": "扣除非经常性损益后的净利润", "pct": 63.03, "desc": "预计2026年1-6月扣除非经常性损益后的净利润盈利:15,300万元,同比上年增长:63.03%。"}, {"t": "每股收益", "pct": null, "desc": "预计2026年1-6月每股收益盈利:1.38元。"}], "ann": [{"t": "2026-07-08 16:31:06", "cat": "业绩预告", "title": "亚联机械:2026年半年度业绩预告"}, {"t": "2026-07-08 18:12:18", "cat": "管理办法/制度", "title": "亚联机械:信息披露管理制度(2026年6月修订)"}, {"t": "2026-07-08 18:12:18", "cat": "议事规则/实施细则", "title": "亚联机械:董事会秘书工作细则(2026年6月修订)"}, {"t": "2026-07-08 18:12:18", "cat": "管理办法/制度", "title": "亚联机械:董事、高级管理人员离职管理制度(2026年6月修订)"}, {"t": "2026-07-08 18:14:06", "cat": "管理办法/制度", "title": "亚联机械:内部审计制度(2026年6月修订)"}, {"t": "2026-07-08 18:14:06", "cat": "股东大会决议公告", "title": "亚联机械:2026年第二次临时股东会决议公告"}, {"t": "2026-07-08 18:15:09", "cat": "法律意见书", "title": "亚联机械:2026年第二次临时股东会法律意见书"}, {"t": "2026-07-08 18:15:09", "cat": "公司章程修订", "title": "亚联机械:公司章程(2026年6月修订)"}, {"t": "2026-07-12 15:31:39", "cat": "股票交易异常波动", "title": "亚联机械:股票交易异常波动公告"}, {"t": "2026-07-12 15:31:39", "cat": "业绩快报", "title": "亚联机械:2026年半年度业绩快报"}]};
+const d = DATA.daily;
+const pct = v => v==null?'—':(v>0?'+':'')+v.toFixed(2)+'%';
+
+// 图:收盘价折线 + 成交量柱 + 事件标注
+(function(){
+  const el=document.getElementById('c-px'), tip=document.getElementById('tip');
+  const W=860,H=360,m={t:18,r:16,b:60,l:44};
+  const iw=W-m.l-m.r, ph=210, vh=54, gap=18;
+  const n=d.length, X=i=>m.l+i/(n-1)*iw;
+  const cl=d.map(x=>x.c), cmin=Math.min(...cl)*0.98, cmax=Math.max(...cl)*1.02;
+  const Y=v=>m.t+ph-(v-cmin)/(cmax-cmin)*ph;
+  const vmax=Math.max(...d.map(x=>x.vol));
+  const vY=v=>m.t+ph+gap+vh-(v/vmax)*vh;
+  let s='<svg viewBox="0 0 '+W+' '+H+'">';
+  // y grid
+  for(let k=0;k<=4;k++){const v=cmin+(cmax-cmin)*k/4; s+='<line x1="'+m.l+'" x2="'+(W-m.r)+'" y1="'+Y(v)+'" y2="'+Y(v)+'" stroke="var(--grid)"/><text x="'+(m.l-6)+'" y="'+(Y(v)+4)+'" text-anchor="end">'+v.toFixed(1)+'</text>';}
+  // 预告分界线(7-08 与 7-09 之间)
+  const bi=d.findIndex(x=>x.d==='2026-07-09');
+  if(bi>0){const bx=(X(bi-1)+X(bi))/2;
+    s+='<line x1="'+bx+'" x2="'+bx+'" y1="'+m.t+'" y2="'+(m.t+ph+gap+vh)+'" stroke="var(--orange)" stroke-dasharray="4 3"/>';
+    s+='<text class="lbl" x="'+(bx+4)+'" y="'+(m.t+12)+'" style="fill:var(--orange)">◀ 7-08盘后 业绩预告</text>';}
+  // volume bars
+  d.forEach((x,i)=>{const c=x.d>='2026-07-09'?'var(--up)':'var(--cmp)';
+    s+='<rect x="'+(X(i)-6)+'" width="12" y="'+vY(x.vol)+'" height="'+(vY(0)-vY(x.vol))+'" rx="1.5" fill="'+c+'" opacity="0.85"/>';});
+  s+='<text x="'+(m.l-6)+'" y="'+(vY(0)+4)+'" text-anchor="end">量</text>';
+  // price line + dots
+  s+='<path d="M'+d.map((x,i)=>X(i).toFixed(1)+' '+Y(x.c).toFixed(1)).join('L')+'" fill="none" stroke="var(--blue)" stroke-width="2.4" stroke-linejoin="round"/>';
+  d.forEach((x,i)=>{const lim=x.pct!=null&&x.pct>9.8;
+    s+='<circle data-i="'+i+'" cx="'+X(i)+'" cy="'+Y(x.c)+'" r="'+(lim?5:3.5)+'" fill="'+(lim?'var(--up)':'var(--blue)')+'" stroke="var(--surface)" stroke-width="1.5"/>';
+    if(lim) s+='<text class="lbl" x="'+X(i)+'" y="'+(Y(x.c)-9)+'" text-anchor="middle" style="fill:var(--up)">涨停</text>';});
+  // x labels (every other)
+  d.forEach((x,i)=>{if(i%2===0||i>=n-3) s+='<text x="'+X(i)+'" y="'+(H-38)+'" text-anchor="middle" transform="rotate(-40 '+X(i)+' '+(H-38)+')">'+x.d.slice(5)+'</text>';});
+  s+='</svg>';
+  el.innerHTML=s;
+  document.getElementById('lg').innerHTML='<span style="color:var(--blue)">●</span> 收盘价　<span style="color:var(--up)">●</span> 涨停日 / 放量　橙色虚线=业绩预告披露';
+  el.querySelectorAll('circle').forEach(c=>{c.addEventListener('pointermove',e=>{const x=d[+c.dataset.i];
+    tip.innerHTML='<b>'+x.d+'</b> 收 '+x.c.toFixed(2)+' ('+pct(x.pct)+')<br>换手 '+(x.to!=null?x.to.toFixed(1)+'%':'—')+' · 额 '+(x.amt/1e8).toFixed(2)+'亿'+(x.lhb?'<br>龙虎榜 买'+x.lhb.buy+'万/卖'+x.lhb.sell+'万':'');
+    tip.style.display='block';const cw=el.getBoundingClientRect();let lx=e.clientX-cw.left+12;if(lx+180>cw.width)lx-=195;tip.style.left=lx+'px';tip.style.top=(e.clientY-cw.top+8)+'px';});
+    c.addEventListener('pointerleave',()=>tip.style.display='none');});
+})();
+
+// 表:逐日
+(function(){
+  let s='<thead><tr><th>日期</th><th>收盘</th><th>涨跌</th><th>换手</th><th>成交额</th><th>PE_TTM</th><th>市值(亿)</th><th>龙虎榜净额</th></tr></thead><tbody>';
+  d.slice().reverse().forEach(x=>{
+    const evt=x.d>='2026-07-09';
+    const net=x.lhb?(x.lhb.buy-x.lhb.sell):null;
+    const cl=v=>v==null?'':(v<0?' class="down"':' class="up"');
+    s+='<tr class="'+(evt?'evt':'')+'"><td>'+x.d+(x.pct>9.8?' <span class="tag">涨停</span>':'')+'</td>'+
+      '<td>'+x.c.toFixed(2)+'</td><td'+cl(x.pct)+'>'+pct(x.pct)+'</td>'+
+      '<td>'+(x.to!=null?x.to.toFixed(1)+'%':'—')+'</td><td>'+(x.amt/1e8).toFixed(2)+'亿</td>'+
+      '<td>'+(x.pe!=null?x.pe.toFixed(1):'—')+'</td><td>'+(x.mv!=null?x.mv.toFixed(1):'—')+'</td>'+
+      '<td'+cl(net)+'>'+(net!=null?(net>0?'+':'')+net.toFixed(0)+'万':'—')+'</td></tr>';
+  });
+  document.getElementById('tbl').innerHTML=s+'</tbody>';
+})();
+
+// 表:事件流
+(function(){
+  let s='<thead><tr><th>时间</th><th>类型</th><th>公告</th></tr></thead><tbody>';
+  (DATA.ann||[]).filter(a=>['业绩预告','业绩快报','股票交易异常波动'].includes(a.cat)).forEach(a=>{
+    s+='<tr><td>'+a.t.slice(0,16)+'</td><td><span class="tag">'+a.cat+'</span></td><td style="text-align:left">'+a.title+'</td></tr>';
+  });
+  document.getElementById('tbl-ann').innerHTML=s+'</tbody>';
+})();
+</script>
