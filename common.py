@@ -1179,6 +1179,22 @@ def _int(row, field):
     return int(v) if v is not None else None
 
 
+def _fv(v):
+    """标量 → float(None/NaN 归 None)。行级用 _num,标量用本函数。"""
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _iv(v):
+    """标量 → int(None/NaN 归 None)。"""
+    f = _fv(v)
+    return int(f) if f is not None else None
+
+
 # ---------------------------------------------------------------------------
 # 并行执行:每个工作线程持有自己的数据库连接(psycopg2 连接不能跨线程共享)。
 # 断点续传由 etl_progress 保证,与并发无关。
@@ -2281,3 +2297,83 @@ def upsert_announcements(conn, df: pd.DataFrame) -> int:
                   ["art_code", "stock_code", "title", "category", "categories", "publish_time", "url"],
                   rows, ["art_code"],
                   update_cols=["title", "category", "categories", "publish_time", "url"])
+
+
+# ===========================================================================
+# 股权结构层(控盘度/机构散户/股东户数)。见 29_schema_holders.sql / 30_holders_update.py。
+# 东财 datacenter f10,不在行情族封禁范围。移交清单 #8。
+# ===========================================================================
+def fetch_top10_holders(symbol: str, period: str, kind: str) -> pd.DataFrame:
+    """十大股东(kind='total')或十大流通股东(kind='float')。period 'YYYYMMDD' 季末。
+    返回列: rank, holder_name, holder_nature, share_type, hold_shares, hold_ratio, change_flag。"""
+    import akshare as ak
+
+    if kind == "total":
+        df = with_retry(ak.stock_gdfx_top_10_em, symbol=to_sina_code(symbol), date=period)
+        ratio_col = "占总股本持股比例"
+        nature_col = None
+    else:
+        df = with_retry(ak.stock_gdfx_free_top_10_em, symbol=to_sina_code(symbol), date=period)
+        ratio_col = "占总流通股本持股比例"
+        nature_col = "股东性质"
+    if df is None or df.empty:
+        return pd.DataFrame()
+    out = pd.DataFrame({
+        "rank": pd.to_numeric(df["名次"], errors="coerce"),
+        "holder_name": df["股东名称"].astype(str),
+        "holder_nature": df[nature_col].astype(str) if nature_col and nature_col in df.columns else None,
+        "share_type": df["股份类型"].astype(str) if "股份类型" in df.columns else None,
+        "hold_shares": pd.to_numeric(df["持股数"], errors="coerce"),
+        "hold_ratio": pd.to_numeric(df[ratio_col], errors="coerce") if ratio_col in df.columns else None,
+        "change_flag": df["增减"].astype(str) if "增减" in df.columns else None,
+    })
+    return out.dropna(subset=["rank"])
+
+
+def fetch_shareholder_count(symbol: str) -> pd.DataFrame:
+    """股东户数(全历史,单请求)。列: report_date, holder_num, avg_hold_shares, avg_hold_value,
+    total_shares, ann_date。"""
+    import akshare as ak
+
+    df = with_retry(ak.stock_zh_a_gdhs_detail_em, symbol=symbol.strip().zfill(6))
+    if df is None or df.empty:
+        return pd.DataFrame()
+    ren = {"股东户数统计截止日": "report_date", "股东户数-本次": "holder_num",
+           "户均持股数量": "avg_hold_shares", "户均持股市值": "avg_hold_value",
+           "总股本": "total_shares", "股东户数公告日期": "ann_date"}
+    df = df.rename(columns=ren)
+    keep = [c for c in ren.values() if c in df.columns]
+    df = df[keep].copy()
+    for c in ("report_date", "ann_date"):
+        if c in df.columns:
+            df[c] = pd.to_datetime(df[c], errors="coerce").dt.date
+    return df.dropna(subset=["report_date"])
+
+
+def upsert_top10_holders(conn, stock_code: str, report_date, kind: str, df: pd.DataFrame) -> int:
+    if df.empty:
+        return 0
+    rows = [(stock_code, report_date, kind, _iv(r.rank), r.holder_name,
+             None if pd.isna(getattr(r, "holder_nature", None)) else str(r.holder_nature),
+             None if pd.isna(getattr(r, "share_type", None)) else str(r.share_type),
+             _iv(r.hold_shares), _fv(r.hold_ratio),
+             None if pd.isna(getattr(r, "change_flag", None)) else str(r.change_flag))
+            for r in df.itertuples(index=False)]
+    return upsert(conn, "top10_holder",
+                  ["stock_code", "report_date", "holder_type", "rank", "holder_name",
+                   "holder_nature", "share_type", "hold_shares", "hold_ratio", "change_flag"],
+                  rows, ["stock_code", "report_date", "holder_type", "rank"])
+
+
+def upsert_shareholder_count(conn, stock_code: str, df: pd.DataFrame) -> int:
+    if df.empty:
+        return 0
+    rows = [(stock_code, r.report_date, _iv(getattr(r, "holder_num", None)),
+             _fv(getattr(r, "avg_hold_shares", None)), _fv(getattr(r, "avg_hold_value", None)),
+             _iv(getattr(r, "total_shares", None)),
+             None if pd.isna(getattr(r, "ann_date", None)) else r.ann_date)
+            for r in df.itertuples(index=False)]
+    return upsert(conn, "shareholder_count",
+                  ["stock_code", "report_date", "holder_num", "avg_hold_shares",
+                   "avg_hold_value", "total_shares", "ann_date"],
+                  rows, ["stock_code", "report_date"])
